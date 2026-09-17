@@ -595,11 +595,7 @@ class Dmgcpu {
 	  }
      }
 
-     boolean speedThrottle = true;
-     if (!JavaBoy.runningAsApplet) {
-      GameBoyScreen g = (GameBoyScreen) applet;
-      speedThrottle = g.viewSpeedThrottle.getState();
-     }
+     boolean speedThrottle = ((GameBoyScreen) applet).viewSpeedThrottle.getState();
      if ((speedThrottle) && (graphicsChip.frameWaitTime >= 0)) {
 //      System.out.println("Waiting for " + graphicsChip.frameWaitTime + "ms.");
       try {
@@ -623,11 +619,7 @@ class Dmgcpu {
      ioHandler.registers[0x44] = 0;
      if (soundChip != null) soundChip.outputSound();
      graphicsChip.frameDone = false;
-	 if (JavaBoy.runningAsApplet) {
-      ((JavaBoy) (applet)).drawNextFrame();
-	 } else {
-      ((GameBoyScreen) (applet)).repaint();
-	 }
+     ((GameBoyScreen) (applet)).repaint();
      try {
       while (!graphicsChip.frameDone) {
        java.lang.Thread.sleep(1);
