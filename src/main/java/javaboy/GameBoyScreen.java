@@ -57,7 +57,6 @@ class GameBoyScreen extends Frame implements ActionListener,
  CheckboxMenuItem soundBuffer300;
  CheckboxMenuItem soundBuffer400;
 
- CheckboxMenuItem networkServer;
  CheckboxMenuItem fileGameboyColor;
  
  CheckboxMenuItem viewSingle;
@@ -65,10 +64,7 @@ class GameBoyScreen extends Frame implements ActionListener,
  CheckboxMenuItem viewTriple;
  CheckboxMenuItem viewQuadrouple;
 
- CheckboxMenuItem networkPrinter;
 
- TextField hostAddress;
- Dialog connectDialog;
 
  CheckboxMenuItem[] schemes =
    new CheckboxMenuItem[JavaBoy.schemeNames.length];
@@ -201,22 +197,12 @@ class GameBoyScreen extends Frame implements ActionListener,
   soundBuffer400 = new CheckboxMenuItem("Buffer length: 400ms");
   soundBuffer400.addItemListener(this);
 
-  MenuItem networkConnect = new MenuItem("Connect to client");
-  networkConnect.setActionCommand("Connect to client");
-  networkConnect.addActionListener(this);
-
-  networkServer = new CheckboxMenuItem("Allow connections");
-  networkServer.addItemListener(this);
-
-  networkPrinter = new CheckboxMenuItem("Emulate printer");
-  networkPrinter.addItemListener(this);
 
 
 
   Menu fileMenu = new Menu("File");
   Menu viewMenu = new Menu("View");
   Menu soundMenu = new Menu("Sound");
-  Menu networkMenu = new Menu("Serial Port");
   Menu debugMenu = new Menu("Debug");
 
   fileMenu.add(fileOpen);
@@ -263,9 +249,6 @@ class GameBoyScreen extends Frame implements ActionListener,
   soundMenu.add(soundBuffer300);
   soundMenu.add(soundBuffer400);
 
-  networkMenu.add(networkConnect);
-  networkMenu.add(networkServer);
-  networkMenu.add(networkPrinter);
 
   debugMenu.add(debugEnter);
   debugMenu.add(debugExecuteScript);
@@ -273,7 +256,6 @@ class GameBoyScreen extends Frame implements ActionListener,
   menuBar.add(fileMenu);
   menuBar.add(viewMenu);
   menuBar.add(soundMenu);
-  menuBar.add(networkMenu);
   menuBar.add(debugMenu);
 
   setMenuBar(menuBar);
@@ -282,36 +264,6 @@ class GameBoyScreen extends Frame implements ActionListener,
 
 
  /** Creates a connection dialog for Game Link connections */
- public void makeConnectDialog() {
-  connectDialog = new Dialog(this, "Game Link connect", true);
-  Panel p1 = new Panel();
-  Panel p2 = new Panel();
-  Panel p3 = new Panel();
-
-  p1.add(new Label("Host address:"), "Center");
-
-  hostAddress = new TextField(35);
-  p2.add(hostAddress, "Center");
-
-  Button connectButton = new Button("Connect");
-  connectButton.setActionCommand("Connect ok");
-  connectButton.addActionListener(this);
-
-  Button cancelButton = new Button("Cancel");
-  cancelButton.setActionCommand("Connect cancel");
-  cancelButton.addActionListener(this);
-
-  p3.add(cancelButton, "West");
-  p3.add(connectButton, "East");
-
-  connectDialog.add(p1, "North");
-  connectDialog.add(p2, "Center");
-  connectDialog.add(p3, "South");
-
-  connectDialog.setSize(350, 125);
-  connectDialog.setResizable(false);
-  connectDialog.show();
- }
 
 
  /** Sets the current GraphicsChip object which is responsible for drawing the screen */
@@ -511,19 +463,6 @@ class GameBoyScreen extends Frame implements ActionListener,
    applet.dmgcpu.graphicsChip.setMagnify(4);
    setWindowSize(4);
    clearWindow();
-  } else if (command.equals("Connect to client")) {
-   makeConnectDialog();
-  } else if (command.equals("Connect cancel")) {
-   connectDialog.hide();
-   connectDialog = null;
-  } else if (command.equals("Connect ok")) {
-   connectDialog.hide();
-   connectDialog = null;
-   applet.gameLink = new TCPGameLink(this, hostAddress.getText());
-   if (applet.dmgcpu != null) {
-    applet.dmgcpu.gameLink = applet.gameLink;
-    applet.gameLink.setDmgcpu(applet.dmgcpu);
-   }
   } else if (command.equals("Exit")) {
    applet.dispose();
    System.exit(0);
@@ -678,41 +617,9 @@ class GameBoyScreen extends Frame implements ActionListener,
    } else {
     fileGameboyColor.setState(!fileGameboyColor.getState());
    }
-  } else if (command.equals("Allow connections")) {
-   if (applet.gameLink == null) {
-    applet.gameLink = new TCPGameLink(this);
-    if (applet.gameLink.serverRunning) {
-     networkServer.setState(true);
-    } else {
-     networkServer.setState(false);
-     applet.gameLink = null;
-    }
-    if (applet.dmgcpu != null) {
-     applet.dmgcpu.gameLink = applet.gameLink;
-     applet.gameLink.setDmgcpu(applet.dmgcpu);
-    }
-   } else {
-    applet.gameLink.shutDown();
-    applet.gameLink = null;
-    if (applet.dmgcpu != null) applet.dmgcpu.gameLink = null;
-   }
-  } else if (command.equals("Emulate printer")) {
-   if (networkPrinter.getState()) {
-    if (applet.gameLink != null) {
-     applet.gameLink.shutDown();
-	 networkServer.setState(false);
-	}
-    applet.gameLink = new GameBoyPrinter();
-	applet.gameLink.setDmgcpu(applet.dmgcpu);
-	applet.dmgcpu.gameLink = applet.gameLink;
-   } else {
-    applet.gameLink.shutDown();
-    applet.gameLink = null;
-   }
   } else {
    setColourScheme(command);
   }
-
  }
 
  public void paint(Graphics g) {

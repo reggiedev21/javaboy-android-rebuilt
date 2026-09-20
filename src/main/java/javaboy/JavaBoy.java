@@ -706,13 +706,6 @@ public class JavaBoy implements Runnable, KeyListener, WindowListener {
 
 //  javaBoy.mainWindow.addKeyListener(javaBoy);
 //  javaBoy.mainWindow.addWindowListener(javaBoy);
-  if (args.length > 0) {
-   if (args[0].equals("server")) {
-    javaBoy.gameLink = new TCPGameLink(null);
-   } else if (args[0].equals("client")) {
-    javaBoy.gameLink = new TCPGameLink(null, args[1]);
-   }
-  }
 //  javaBoy.mainWindow.setGraphicsChip(javaBoy.dmgcpu.graphicsChip);
 
   Thread p = new Thread(javaBoy);
