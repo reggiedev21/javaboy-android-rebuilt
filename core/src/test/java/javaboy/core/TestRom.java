@@ -8,6 +8,8 @@ import java.util.List;
 public final class TestRom {
     private final List<Integer> code = new ArrayList<>();
 
+    public int size() { return code.size(); }
+
     public TestRom emit(int... bytes) { for (int b : bytes) code.add(b & 0xFF); return this; }
 
     // Quelques mnémoniques usuels

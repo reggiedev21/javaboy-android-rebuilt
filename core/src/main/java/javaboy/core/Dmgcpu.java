@@ -40,7 +40,7 @@ public final class Dmgcpu {
  /** The number of instructions that have been executed since the
   *  last reset
   */
- int instrCount = 0;
+ public int instrCount = 0;
 
  boolean interruptsEnabled = false;
 
