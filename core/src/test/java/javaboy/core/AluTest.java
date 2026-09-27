@@ -42,7 +42,7 @@ class AluTest {
     @Test void rotates() {
         assertEquals(0x01, result(rlc(0x80))); assertEquals(C, flags(rlc(0x80)));
         assertEquals(0x80, result(rrc(0x01))); assertEquals(C, flags(rrc(0x01)));
-        assertEquals(0x01, result(rl(0x80, 0))); assertEquals(0x00 | 0, result(rl(0x00, 0))); assertEquals(Z, flags(rl(0, 0)));
+        assertEquals(0x00, result(rl(0x80, 0))); assertEquals(Z | C, flags(rl(0x80, 0))); assertEquals(Z, flags(rl(0, 0)));
         assertEquals(0x01, result(rl(0x00, C))); assertEquals(0, flags(rl(0, C)));
         assertEquals(0xC0, result(rr(0x81, C))); assertEquals(C, flags(rr(0x81, C)));
         assertEquals(0xFE, result(sla(0xFF))); assertEquals(0xC0, result(sra(0x81))); assertEquals(0x40, result(srl(0x81)));
@@ -60,7 +60,7 @@ class AluTest {
     }
     @Test void addSpSignedFlags() {
         int p = addSpSigned(0xFFF8, 0x08); assertEquals(0x0000, result16(p)); assertEquals(H | C, flags16(p));
-        int q = addSpSigned(0x0010, 0xFF); assertEquals(0x000F, result16(q)); assertEquals(0, flags16(q)); // -1 : pas de retenue basse
+        int q = addSpSigned(0x0010, 0xFF); assertEquals(0x000F, result16(q)); assertEquals(C, flags16(q)); // -1 = 0xFF : retenue sur l'octet bas
         int r = addSpSigned(0x0001, 0xFF); assertEquals(0x0000, result16(r)); assertEquals(H | C, flags16(r));
     }
 }
