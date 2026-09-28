@@ -59,13 +59,13 @@ public final class Dmgcpu {
  // Constants for flags register
 
  /** Zero flag */
- final short F_ZERO =      0x80;
+ static final int F_ZERO =      0x80;
  /** Subtract/negative flag */
- final short F_SUBTRACT =  0x40;
+ static final int F_SUBTRACT =  0x40;
  /** Half carry flag */
- final short F_HALFCARRY = 0x20;
+ static final int F_HALFCARRY = 0x20;
  /** Carry flag */
- final short F_CARRY =     0x10;
+ static final int F_CARRY =     0x10;
 
  final short INSTRS_PER_VBLANK = 9000; /* 10000  */
 
@@ -139,6 +139,7 @@ public final class Dmgcpu {
   checkEnableGbc();
   soundChip = new SoundChip(audio, sampleRate);
   ioHandler = new IoHandler(this, joypad);
+  buildTables();
  }
 
 
@@ -437,6 +438,7 @@ public final class Dmgcpu {
   graphicsChip.reset();
   cartridge.reset();
   interruptsEnabled = false;
+  halted = false;
   ieDelay = -1;
   pc = 0x0100;
   sp = 0xFFFE;
@@ -602,6 +604,178 @@ public final class Dmgcpu {
    }
  }
 
+ // ------------------------------------------------------------------
+ //  Décodage par table : Opcode[256] pour les opcodes de base, Opcode[256]
+ //  pour le préfixe CB. Les lambdas sont créées une seule fois à la
+ //  construction ; la boucle chaude ne fait que table[op].execute(this).
+ // ------------------------------------------------------------------
+
+ @FunctionalInterface
+ interface Opcode { void execute(Dmgcpu cpu); }
+
+ private final Opcode[] table = new Opcode[256];
+ private final Opcode[] cbTable = new Opcode[256];
+
+ /** Vrai quand le CPU est en HALT (attend une interruption). */
+ boolean halted = false;
+
+ // --- accès mémoire courts pour les lambdas ---
+ final int rd(int addr) { return addressRead(addr) & 0xFF; }
+ final void wr(int addr, int v) { addressWrite(addr, v & 0xFF); }
+ final int imm8() { return rd(pc + 1); }
+ final int imm16() { return rd(pc + 1) | (rd(pc + 2) << 8); }
+ final int bc() { return (b << 8) | c; }
+ final int de() { return (d << 8) | e; }
+ final int h() { return hl >> 8; }
+ final int l() { return hl & 0xFF; }
+ final void push(int v) { sp = (sp - 2) & 0xFFFF; wr(sp, v); wr(sp + 1, v >> 8); }
+ final int pop() { int v = rd(sp) | (rd(sp + 1) << 8); sp = (sp + 2) & 0xFFFF; return v; }
+ final void call(int target) { push(pc); pc = target; }
+ final void setAlu(int packed) { a = Alu.result(packed); f = Alu.flags(packed); }
+ final boolean cond(int cc) {
+  switch (cc) {
+   case 0: return (f & F_ZERO) == 0;   // NZ
+   case 1: return (f & F_ZERO) != 0;   // Z
+   case 2: return (f & F_CARRY) == 0;  // NC
+   default: return (f & F_CARRY) != 0; // C
+  }
+ }
+ /** Lecture d'un registre 16 bits par index (BC, DE, HL, SP). */
+ final int rr16(int i) { switch (i) { case 0: return bc(); case 1: return de(); case 2: return hl; default: return sp; } }
+ final void setRr16(int i, int v) { v &= 0xFFFF; switch (i) { case 0: setBC(v); break; case 1: setDE(v); break; case 2: hl = v; break; default: sp = v; } }
+
+ private void buildTables() {
+  // ----- 0x00-0x3F : groupe irrégulier -----
+  table[0x00] = cpu -> cpu.pc++;                                            // NOP
+  table[0x10] = Dmgcpu::stop;                                               // STOP
+  table[0x07] = cpu -> { cpu.setAlu(Alu.clearZ(Alu.rlc(cpu.a))); cpu.pc++; };        // RLCA
+  table[0x0F] = cpu -> { cpu.setAlu(Alu.clearZ(Alu.rrc(cpu.a))); cpu.pc++; };        // RRCA
+  table[0x17] = cpu -> { cpu.setAlu(Alu.clearZ(Alu.rl(cpu.a, cpu.f))); cpu.pc++; };  // RLA
+  table[0x1F] = cpu -> { cpu.setAlu(Alu.clearZ(Alu.rr(cpu.a, cpu.f))); cpu.pc++; };  // RRA
+  table[0x08] = cpu -> { int nn = cpu.imm16(); cpu.wr(nn, cpu.sp); cpu.wr(nn + 1, cpu.sp >> 8); cpu.pc += 3; }; // LD (nn),SP
+  table[0x18] = cpu -> cpu.pc += 2 + (byte) cpu.imm8();                     // JR e
+  table[0x27] = cpu -> { cpu.setAlu(Alu.daa(cpu.a, cpu.f)); cpu.pc++; };    // DAA
+  table[0x2F] = cpu -> { cpu.a ^= 0xFF; cpu.f |= F_SUBTRACT | F_HALFCARRY; cpu.pc++; }; // CPL
+  table[0x37] = cpu -> { cpu.f = (cpu.f & F_ZERO) | F_CARRY; cpu.pc++; };  // SCF
+  table[0x3F] = cpu -> { cpu.f = (cpu.f & F_ZERO) | ((cpu.f & F_CARRY) ^ F_CARRY); cpu.pc++; }; // CCF
+  table[0x02] = cpu -> { cpu.wr(cpu.bc(), cpu.a); cpu.pc++; };             // LD (BC),A
+  table[0x12] = cpu -> { cpu.wr(cpu.de(), cpu.a); cpu.pc++; };             // LD (DE),A
+  table[0x22] = cpu -> { cpu.wr(cpu.hl, cpu.a); cpu.hl = (cpu.hl + 1) & 0xFFFF; cpu.pc++; }; // LD (HL+),A
+  table[0x32] = cpu -> { cpu.wr(cpu.hl, cpu.a); cpu.hl = (cpu.hl - 1) & 0xFFFF; cpu.pc++; }; // LD (HL-),A
+  table[0x0A] = cpu -> { cpu.a = cpu.rd(cpu.bc()); cpu.pc++; };            // LD A,(BC)
+  table[0x1A] = cpu -> { cpu.a = cpu.rd(cpu.de()); cpu.pc++; };            // LD A,(DE)
+  table[0x2A] = cpu -> { cpu.a = cpu.rd(cpu.hl); cpu.hl = (cpu.hl + 1) & 0xFFFF; cpu.pc++; }; // LD A,(HL+)
+  table[0x3A] = cpu -> { cpu.a = cpu.rd(cpu.hl); cpu.hl = (cpu.hl - 1) & 0xFFFF; cpu.pc++; }; // LD A,(HL-)
+  for (int i = 0; i < 4; i++) {
+   final int r = i;
+   table[0x01 | (r << 4)] = cpu -> { cpu.setRr16(r, cpu.imm16()); cpu.pc += 3; };        // LD rr,nn
+   table[0x03 | (r << 4)] = cpu -> { cpu.setRr16(r, cpu.rr16(r) + 1); cpu.pc++; };       // INC rr
+   table[0x0B | (r << 4)] = cpu -> { cpu.setRr16(r, cpu.rr16(r) - 1); cpu.pc++; };       // DEC rr
+   table[0x09 | (r << 4)] = cpu -> { int p = Alu.add16(cpu.hl, cpu.rr16(r), cpu.f); cpu.hl = Alu.result16(p); cpu.f = Alu.flags16(p); cpu.pc++; }; // ADD HL,rr
+   final int cc = i;
+   table[0x20 | (cc << 3)] = cpu -> { if (cpu.cond(cc)) cpu.pc += 2 + (byte) cpu.imm8(); else cpu.pc += 2; }; // JR cc,e
+   table[0xC0 | (cc << 3)] = cpu -> { if (cpu.cond(cc)) cpu.pc = cpu.pop(); else cpu.pc++; };                // RET cc
+   table[0xC2 | (cc << 3)] = cpu -> { if (cpu.cond(cc)) cpu.pc = cpu.imm16(); else cpu.pc += 3; };           // JP cc,nn
+   table[0xC4 | (cc << 3)] = cpu -> { int nn = cpu.imm16(); cpu.pc += 3; if (cpu.cond(cc)) cpu.call(nn); };  // CALL cc,nn
+  }
+  for (int i = 0; i < 8; i++) {
+   final int r = i;
+   table[0x04 | (r << 3)] = cpu -> { int p = Alu.inc8(cpu.registerRead(r), cpu.f); cpu.registerWrite(r, Alu.result(p)); cpu.f = Alu.flags(p); cpu.pc++; }; // INC r
+   table[0x05 | (r << 3)] = cpu -> { int p = Alu.dec8(cpu.registerRead(r), cpu.f); cpu.registerWrite(r, Alu.result(p)); cpu.f = Alu.flags(p); cpu.pc++; }; // DEC r
+   table[0x06 | (r << 3)] = cpu -> { cpu.registerWrite(r, cpu.imm8()); cpu.pc += 2; };   // LD r,n
+   table[0xC7 | (r << 3)] = cpu -> { cpu.pc++; cpu.call(r * 8); };                       // RST
+  }
+  // ----- 0x40-0x7F : LD r,r' (0x76 = HALT) -----
+  for (int op = 0x40; op < 0x80; op++) {
+   final int dst = (op >> 3) & 7, src = op & 7;
+   table[op] = cpu -> { cpu.registerWrite(dst, cpu.registerRead(src)); cpu.pc++; };
+  }
+  table[0x76] = cpu -> { cpu.halted = true; cpu.pc++; };
+  // ----- 0x80-0xBF : ALU A,r  et  0xC6/CE/D6/DE/E6/EE/F6/FE : ALU A,n -----
+  for (int opn = 0; opn < 8; opn++) {
+   final int o = opn;
+   for (int r = 0; r < 8; r++) {
+    final int rr = r;
+    table[0x80 | (o << 3) | r] = cpu -> { cpu.alu(o, cpu.registerRead(rr)); cpu.pc++; };
+   }
+   table[0xC6 | (o << 3)] = cpu -> { cpu.alu(o, cpu.imm8()); cpu.pc += 2; };
+  }
+  // ----- 0xC0-0xFF : reste -----
+  table[0xC1] = cpu -> { cpu.setBC(cpu.pop()); cpu.pc++; };
+  table[0xD1] = cpu -> { cpu.setDE(cpu.pop()); cpu.pc++; };
+  table[0xE1] = cpu -> { cpu.hl = cpu.pop(); cpu.pc++; };
+  table[0xF1] = cpu -> { int v = cpu.pop(); cpu.a = v >> 8; cpu.f = v & 0xF0; cpu.pc++; };
+  table[0xC5] = cpu -> { cpu.push(cpu.bc()); cpu.pc++; };
+  table[0xD5] = cpu -> { cpu.push(cpu.de()); cpu.pc++; };
+  table[0xE5] = cpu -> { cpu.push(cpu.hl); cpu.pc++; };
+  table[0xF5] = cpu -> { cpu.push((cpu.a << 8) | (cpu.f & 0xF0)); cpu.pc++; };
+  table[0xC3] = cpu -> cpu.pc = cpu.imm16();                                // JP nn
+  table[0xC9] = cpu -> cpu.pc = cpu.pop();                                  // RET
+  table[0xD9] = cpu -> { cpu.pc = cpu.pop(); cpu.interruptsEnabled = true; cpu.inInterrupt = false; }; // RETI
+  table[0xCD] = cpu -> { int nn = cpu.imm16(); cpu.pc += 3; cpu.call(nn); }; // CALL nn
+  table[0xCB] = cpu -> { int op = cpu.imm8(); cpu.pc += 2; cpu.cbTable[op].execute(cpu); };
+  table[0xE0] = cpu -> { cpu.wr(0xFF00 + cpu.imm8(), cpu.a); cpu.pc += 2; }; // LDH (n),A
+  table[0xF0] = cpu -> { cpu.a = cpu.rd(0xFF00 + cpu.imm8()); cpu.pc += 2; }; // LDH A,(n)
+  table[0xE2] = cpu -> { cpu.wr(0xFF00 + cpu.c, cpu.a); cpu.pc++; };        // LD (C),A
+  table[0xF2] = cpu -> { cpu.a = cpu.rd(0xFF00 + cpu.c); cpu.pc++; };       // LD A,(C)
+  table[0xEA] = cpu -> { cpu.wr(cpu.imm16(), cpu.a); cpu.pc += 3; };        // LD (nn),A
+  table[0xFA] = cpu -> { cpu.a = cpu.rd(cpu.imm16()); cpu.pc += 3; };       // LD A,(nn)
+  table[0xE8] = cpu -> { int p = Alu.addSpSigned(cpu.sp, cpu.imm8()); cpu.sp = Alu.result16(p); cpu.f = Alu.flags16(p); cpu.pc += 2; }; // ADD SP,e
+  table[0xF8] = cpu -> { int p = Alu.addSpSigned(cpu.sp, cpu.imm8()); cpu.hl = Alu.result16(p); cpu.f = Alu.flags16(p); cpu.pc += 2; }; // LD HL,SP+e
+  table[0xE9] = cpu -> cpu.pc = cpu.hl;                                     // JP HL
+  table[0xF9] = cpu -> { cpu.sp = cpu.hl; cpu.pc++; };                      // LD SP,HL
+  table[0xF3] = cpu -> { cpu.interruptsEnabled = false; cpu.ieDelay = -1; cpu.pc++; }; // DI
+  table[0xFB] = cpu -> { cpu.ieDelay = 1; cpu.pc++; };                      // EI (effet différé d'une instruction)
+  // Opcodes illégaux : traités comme NOP pour ne pas figer l'émulation
+  for (int op = 0; op < 256; op++) if (table[op] == null) { final int bad = op; table[op] = cpu -> { System.out.println("Opcode illégal " + Bits.hexByte(bad) + " en " + Bits.hexWord(cpu.pc)); cpu.pc++; }; }
+
+  // ----- préfixe CB : 8 opérations de décalage × 8 registres, puis BIT/RES/SET -----
+  for (int r = 0; r < 8; r++) {
+   final int rr = r;
+   cbTable[0x00 | r] = cpu -> cpu.cbSet(rr, Alu.rlc(cpu.registerRead(rr)));
+   cbTable[0x08 | r] = cpu -> cpu.cbSet(rr, Alu.rrc(cpu.registerRead(rr)));
+   cbTable[0x10 | r] = cpu -> cpu.cbSet(rr, Alu.rl(cpu.registerRead(rr), cpu.f));
+   cbTable[0x18 | r] = cpu -> cpu.cbSet(rr, Alu.rr(cpu.registerRead(rr), cpu.f));
+   cbTable[0x20 | r] = cpu -> cpu.cbSet(rr, Alu.sla(cpu.registerRead(rr)));
+   cbTable[0x28 | r] = cpu -> cpu.cbSet(rr, Alu.sra(cpu.registerRead(rr)));
+   cbTable[0x30 | r] = cpu -> cpu.cbSet(rr, Alu.swap(cpu.registerRead(rr)));
+   cbTable[0x38 | r] = cpu -> cpu.cbSet(rr, Alu.srl(cpu.registerRead(rr)));
+   for (int n = 0; n < 8; n++) {
+    final int bit = n;
+    cbTable[0x40 | (n << 3) | r] = cpu -> cpu.f = Alu.flags(Alu.bit(bit, cpu.registerRead(rr), cpu.f));
+    cbTable[0x80 | (n << 3) | r] = cpu -> cpu.registerWrite(rr, cpu.registerRead(rr) & ~(1 << bit));
+    cbTable[0xC0 | (n << 3) | r] = cpu -> cpu.registerWrite(rr, cpu.registerRead(rr) | (1 << bit));
+   }
+  }
+ }
+
+ final void cbSet(int r, int packed) { registerWrite(r, Alu.result(packed)); f = Alu.flags(packed); }
+
+ /** Opération ALU 0-7 (ADD, ADC, SUB, SBC, AND, XOR, OR, CP) sur A. */
+ final void alu(int op, int v) {
+  int carry = (f & F_CARRY) != 0 ? 1 : 0;
+  switch (op) {
+   case 0: setAlu(Alu.add8(a, v)); break;
+   case 1: setAlu(Alu.adc8(a, v, carry)); break;
+   case 2: setAlu(Alu.sub8(a, v)); break;
+   case 3: setAlu(Alu.sbc8(a, v, carry)); break;
+   case 4: setAlu(Alu.and8(a, v)); break;
+   case 5: setAlu(Alu.xor8(a, v)); break;
+   case 6: setAlu(Alu.or8(a, v)); break;
+   default: f = Alu.flags(Alu.cp8(a, v)); break;
+  }
+ }
+
+ private void stop() {
+  pc += 2;
+  if (gbcFeatures && (ioHandler.registers[0x4D] & 0x01) == 1) {      // commutation de vitesse GBC
+   int key1 = ioHandler.registers[0x4D] & 0xFE;
+   if ((key1 & 0x80) == 0x80) { setDoubleSpeedCpu(false); key1 &= 0x7F; }
+   else { setDoubleSpeedCpu(true); key1 |= 0x80; }
+   ioHandler.registers[0x4D] = (byte) key1;
+  }
+ }
+
  /** Exécute jusqu'à la fin de l'image courante (VBlank), puis rend la main à l'hôte. */
  public void runFrame() {
   frameReady = false;
@@ -610,1469 +784,30 @@ public final class Dmgcpu {
   stopAtFrame = false;
  }
 
- /** Execute the specified number of Gameboy instructions.  Use '-1' to execute forever */
+ /** Exécute le nombre d'instructions donné (-1 : sans limite, jusqu'à terminate ou fin d'image). */
  public final void execute(int numInstr) {
-
   terminate = false;
-  short newf;
-  int dat;
   running = true;
-  int b1, b2, b3, offset;
+  final Opcode[] t = table;
+  final byte[] io = ioHandler.registers;
 
-  for (int r = 0; (r != numInstr) && (!terminate) && !(stopAtFrame && frameReady); r++) {
-
-//   System.out.print(" " + Bits.hexWord(pc) + ":" + Bits.hexByte(cartridge.currentBank));
+  for (int r = 0; (r != numInstr) && !terminate && !(stopAtFrame && frameReady); r++) {
    instrCount++;
 
-   b1 = Bits.unsign(addressRead(pc));
-   offset = addressRead(pc + 1);
-   b3 = Bits.unsign(addressRead(pc + 2));
-   b2 = Bits.unsign((short) offset);
-
-   switch (b1) {
-    case 0x00 :               // NOP
-        pc++;
-        break;
-    case 0x01 :               // LD BC, nn
-        pc+=3;
-        b = b3;
-        c = b2;
-        break;
-    case 0x02 :               // LD (BC), A
-        pc++;
-        addressWrite((b << 8) | c, a);
-        break;
-    case 0x03 :               // INC BC
-        pc++;
-        c++;
-        if (c == 0x0100) {
-         b++;
-         c = 0;
-         if (b == 0x0100) {
-          b = 0;
-         }
-        }
-        break;
-    case 0x04 :               // INC B
-        pc++;
-        f &= F_CARRY;
-        switch (b) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    b = 0x00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    b = 0x10;
-                    break;
-         default:   b++;
-                    break;
-        }
-        break;
-    case 0x05 :               // DEC B
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (b) {
-         case 0x00: f |= F_HALFCARRY;
-                    b = 0xFF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    b = 0x0F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    b = 0x00;
-                    break;
-         default:   b--;
-                    break;
-        }
-        break;
-    case 0x06 :               // LD B, nn
-        pc += 2;
-        b = b2;
-        break;
-    case 0x07 :               // RLC A
-        pc++;
-        f = 0;
-
-        a <<= 1;
-
-        if ((a & 0x0100) != 0) {
-         f |= F_CARRY;
-         a |= 1;
-         a &= 0xFF;
-        }
-        if (a == 0) {
-         f |= F_ZERO;
-        }
-        break;
-    case 0x08 :               // LD (nnnn), SP   /* **** May be wrong! **** */
-        pc+=3;
-        addressWrite((b3 << 8) + b2 + 1, (sp & 0xFF00) >> 8);
-        addressWrite((b3 << 8) + b2, (sp & 0x00FF));
-        break;
-    case 0x09 :               // ADD HL, BC
-        pc++;
-        hl = (hl + ((b << 8) + c));
-        if ((hl & 0xFFFF0000) != 0) {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)) | (F_CARRY));
-         hl &= 0xFFFF;
-        } else {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)));
-        }
-        break;
-    case 0x0A :               // LD A, (BC)
-        pc++;
-        a = Bits.unsign(addressRead((b << 8) + c));
-        break;
-    case 0x0B :               // DEC BC
-        pc++;
-        c--;
-        if ((c & 0xFF00) != 0) {
-         c = 0xFF;
-         b--;
-         if ((b & 0xFF00) != 0) {
-          b = 0xFF;
-         }
-        }
-        break;
-    case 0x0C :               // INC C
-        pc++;
-        f &= F_CARRY;
-        switch (c) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    c = 0x00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    c = 0x10;
-                    break;
-         default:   c++;
-                    break;
-        }
-        break;
-    case 0x0D :               // DEC C
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (c) {
-         case 0x00: f |= F_HALFCARRY;
-                    c = 0xFF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    c = 0x0F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    c = 0x00;
-                    break;
-         default:   c--;
-                    break;
-        }
-        break;
-    case 0x0E :               // LD C, nn
-        pc+=2;
-        c = b2;
-        break;        
-    case 0x0F :               // RRC A
-        pc++;
-        if ((a & 0x01) == 0x01) {
-         f = F_CARRY;
-        } else {
-         f = 0;
-        }
-        a >>= 1;
-        if ((f & F_CARRY) == F_CARRY) {
-         a |= 0x80;
-        }
-        if (a == 0) {
-         f |= F_ZERO;
-        }
-        break;
-    case 0x10 :               // STOP
-        pc+=2;
-
-        if (gbcFeatures) {
-         if ((ioHandler.registers[0x4D] & 0x01) == 1) {
-          int newKey1Reg = ioHandler.registers[0x4D] & 0xFE;
-          if ((newKey1Reg & 0x80) == 0x80) {
-           setDoubleSpeedCpu(false);
-           newKey1Reg &= 0x7F;
-          } else {
-           setDoubleSpeedCpu(true);
-           newKey1Reg |= 0x80;
-//           System.out.println("CAUTION: Game uses double speed CPU, humoungus PC required!");
-          }
-          ioHandler.registers[0x4D] = (byte) newKey1Reg;
-         }
-        }
-
-//        terminate = true;
-//        System.out.println("- Breakpoint reached");
-        break;
-    case 0x11 :               // LD DE, nnnn
-        pc+=3;
-        d = b3;
-        e = b2;
-        break;
-    case 0x12 :               // LD (DE), A
-        pc++;
-        addressWrite((d << 8) + e, a);
-        break;
-    case 0x13 :               // INC DE
-        pc++;
-        e++;
-        if (e == 0x0100) {
-         d++;
-         e = 0;
-         if (d == 0x0100) {
-          d = 0;
-         }
-        }
-        break;
-    case 0x14 :               // INC D
-        pc++;
-        f &= F_CARRY;
-        switch (d) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    d = 0x00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    d = 0x10;
-                    break;
-         default:   d++;
-                    break;
-        }
-        break;
-    case 0x15 :               // DEC D
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (d) {
-         case 0x00: f |= F_HALFCARRY;
-                    d = 0xFF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    d = 0x0F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    d = 0x00;
-                    break;
-         default:   d--;
-                    break;
-        }
-        break;
-    case 0x16 :               // LD D, nn
-        pc += 2;
-        d = b2;
-        break;
-    case 0x17 :               // RL A
-        pc++;
-        if ((a & 0x80) == 0x80) {
-         newf = F_CARRY;
-        } else {
-         newf = 0;
-        }
-        a <<= 1;
-          
-        if ((f & F_CARRY) == F_CARRY) {
-         a |= 1;
-        }
-
-        a &= 0xFF;
-        if (a == 0) {
-         newf |= F_ZERO;
-        }
-        f = newf;
-        break;
-    case 0x18 :               // JR nn
-        pc += 2 + offset;
-        break;
-    case 0x19 :               // ADD HL, DE
-        pc++;
-        hl = (hl + ((d << 8) + e));
-        if ((hl & 0xFFFF0000) != 0) {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)) | (F_CARRY));
-         hl &= 0xFFFF;
-        } else {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)));
-        }
-        break;
-    case 0x1A :               // LD A, (DE)
-        pc++;
-        a = Bits.unsign(addressRead((d << 8) + e));
-        break;
-    case 0x1B :               // DEC DE
-        pc++;
-        e--;
-        if ((e & 0xFF00) != 0) {
-         e = 0xFF;
-         d--;
-         if ((d & 0xFF00) != 0) {
-          d = 0xFF;
-         }
-        }
-        break;
-    case 0x1C :               // INC E
-        pc++;
-        f &= F_CARRY;
-        switch (e) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    e = 0x00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    e = 0x10;
-                    break;
-         default:   e++;
-                    break;
-        }
-        break;
-    case 0x1D :               // DEC E
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (e) {
-         case 0x00: f |= F_HALFCARRY;
-                    e = 0xFF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    e = 0x0F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    e = 0x00;
-                    break;
-         default:   e--;
-                    break;
-        }
-        break;
-    case 0x1E :               // LD E, nn
-        pc+=2;
-        e = b2;
-        break;
-    case 0x1F :               // RR A
-        pc++;
-        if ((a & 0x01) == 0x01) {
-         newf = F_CARRY;
-        } else {
-         newf = 0;
-        }
-        a >>= 1;
-  
-        if ((f & F_CARRY) == F_CARRY) {
-         a |= 0x80;
-        }
-      
-        if (a == 0) {
-         newf |= F_ZERO;
-        }
-        f = newf;
-        break;
-    case 0x20 :               // JR NZ, nn
-        if ((f & 0x80) == 0x00) {
-         pc += 2 + offset;
-        } else {
-         pc += 2;
-        }
-        break;
-    case 0x21 :               // LD HL, nnnn
-        pc += 3;
-        hl = (b3 << 8) + b2;
-        break;
-    case 0x22 :               // LD (HL+), A
-        pc++;
-        addressWrite(hl, a);
-        hl = (hl + 1) & 0xFFFF;
-        break;
-    case 0x23 :               // INC HL
-        pc++;
-        hl = (hl + 1) & 0xFFFF;
-        break;
-    case 0x24 :               // INC H         ** May be wrong **
-        pc++;
-        f &= F_CARRY;
-        switch ((hl & 0xFF00) >> 8) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    hl = (hl & 0x00FF);
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    hl = (hl & 0x00FF) | 0x10;
-                    break;
-         default:   hl = (hl + 0x0100);
-                    break;
-        }
-        break;
-    case 0x25 :               // DEC H           ** May be wrong **
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch ((hl & 0xFF00) >> 8) {
-         case 0x00: f |= F_HALFCARRY;
-                    hl = (hl & 0x00FF) | (0xFF00);
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    hl = (hl & 0x00FF) | (0x0F00);
-                    break;
-         case 0x01: f |= F_ZERO;
-                    hl = (hl & 0x00FF);
-                    break;
-         default:   hl = (hl & 0x00FF) | ((hl & 0xFF00) - 0x0100);
-                    break;
-        }
-        break;
-    case 0x26 :               // LD H, nn
-        pc+=2;
-        hl = (hl & 0x00FF) | (b2 << 8);
-        break;
-    case 0x27 :               // DAA         ** This could be wrong! **
-        pc++;
-
-        int upperNibble = (a & 0xF0) >> 4;
-        int lowerNibble = a & 0x0F;
-
-//        System.out.println("Daa at " + Bits.hexWord(pc));
-
-        newf = (short) (f & F_SUBTRACT);
-
-        if ((f & F_SUBTRACT) == 0) {
-
-         if ((f & F_CARRY) == 0) {
-          if ((upperNibble <= 8) && (lowerNibble >= 0xA) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0x06;
-          }
-
-          if ((upperNibble <= 9) && (lowerNibble <= 0x3) &&
-             ((f & F_HALFCARRY) == F_HALFCARRY)) {
-           a += 0x06;
-          }
-
-          if ((upperNibble >= 0xA) && (lowerNibble <= 0x9) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0x60;
-           newf |= F_CARRY;
-          }
-
-          if ((upperNibble >= 0x9) && (lowerNibble >= 0xA) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0x66;
-           newf |= F_CARRY;
-          }
-
-          if ((upperNibble >= 0xA) && (lowerNibble <= 0x3) &&
-             ((f & F_HALFCARRY) == F_HALFCARRY)) {
-           a += 0x66;
-           newf |= F_CARRY;
-          }
-
-         } else {  // If carry set
-
-          if ((upperNibble <= 0x2) && (lowerNibble <= 0x9) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0x60;
-           newf |= F_CARRY;
-          }
-
-          if ((upperNibble <= 0x2) && (lowerNibble >= 0xA) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0x66;
-           newf |= F_CARRY;
-          }
-
-          if ((upperNibble <= 0x3) && (lowerNibble <= 0x3) &&
-             ((f & F_HALFCARRY) == F_HALFCARRY)) {
-           a += 0x66;
-           newf |= F_CARRY;
-          }
-
-         }
-
-        } else { // Subtract is set
-
-         if ((f & F_CARRY) == 0) {
-
-          if ((upperNibble <= 0x8) && (lowerNibble >= 0x6) &&
-             ((f & F_HALFCARRY) == F_HALFCARRY)) {
-           a += 0xFA;
-          }
-
-         } else { // Carry is set
-
-          if ((upperNibble >= 0x7) && (lowerNibble <= 0x9) &&
-             ((f & F_HALFCARRY) == 0)) {
-           a += 0xA0;
-           newf |= F_CARRY;
-          }
-
-          if ((upperNibble >= 0x6) && (lowerNibble >= 0x6) &&
-             ((f & F_HALFCARRY) == F_HALFCARRY)) {
-           a += 0x9A;
-           newf |= F_CARRY;
-          }
-
-         }
-
-        }
-
-        a &= 0x00FF;
-        if (a == 0) newf |= F_ZERO;
-
-        f = newf;
-
-        break;
-    case 0x28 :               // JR Z, nn
-        if ((f & F_ZERO) == F_ZERO) {
-         pc += 2 + offset;
-        } else {
-         pc += 2;
-        }
-        break;
-    case 0x29 :               // ADD HL, HL
-        pc++;
-        hl = (hl + hl);
-        if ((hl & 0xFFFF0000) != 0) {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)) | (F_CARRY));
-         hl &= 0xFFFF;
-        } else {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)));
-        }
-        break;
-    case 0x2A :               // LDI A, (HL)
-        pc++;                    
-        a = Bits.unsign(addressRead(hl));
-        hl++;
-        break;
-    case 0x2B :               // DEC HL
-        pc++;
-        if (hl == 0) {
-         hl = 0xFFFF;
-        } else {
-         hl--;
-        }
-        break;
-    case 0x2C :               // INC L
-        pc++;
-        f &= F_CARRY;
-        switch (hl & 0x00FF) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    hl = hl & 0xFF00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    hl++;
-                    break;
-         default:   hl++;
-                    break;
-        }
-        break;
-    case 0x2D :               // DEC L
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (hl & 0x00FF) {
-         case 0x00: f |= F_HALFCARRY;
-                    hl = (hl & 0xFF00) | 0x00FF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    hl = (hl & 0xFF00) | 0x000F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    hl = (hl & 0xFF00);
-                    break;
-         default:   hl = (hl & 0xFF00) | ((hl & 0x00FF) - 1);
-                    break;
-        }
-        break;
-    case 0x2E :               // LD L, nn
-        pc+=2;
-        hl = (hl & 0xFF00) | b2;
-        break;
-    case 0x2F :               // CPL A
-        pc++;
-        short mask = 0x80;
-/*        short result = 0;
-        for (int n = 0; n < 8; n++) {
-         if ((a & mask) == 0) {
-          result |= mask;
-         } else {
-         }
-         mask >>= 1;
-        }*/
-        a = (short) ((~a) & 0x00FF);
-        f = (short) ((f & (F_CARRY | F_ZERO)) | F_SUBTRACT | F_HALFCARRY);
-        break;
-    case 0x30 :               // JR NC, nn
-        if ((f & F_CARRY) == 0) {
-         pc += 2 + offset;
-        } else {
-         pc += 2;
-        }
-        break;
-    case 0x31 :               // LD SP, nnnn
-        pc += 3;
-        sp = (b3 << 8) + b2;
-        break;
-    case 0x32 :
-        pc++;
-        addressWrite(hl, a);  // LD (HL-), A
-        hl--;
-        break;
-    case 0x33 :               // INC SP
-        pc++;
-        sp = (sp + 1) & 0xFFFF;
-        break;
-    case 0x34 :               // INC (HL)
-        pc++;
-        f &= F_CARRY;
-        dat = Bits.unsign(addressRead(hl));
-        switch (dat) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    addressWrite(hl, 0x00);
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    addressWrite(hl, 0x10);
-                    break;
-         default:   addressWrite(hl, dat + 1);
-                    break;
-        }
-        break;
-    case 0x35 :               // DEC (HL)
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        dat = Bits.unsign(addressRead(hl));
-        switch (dat) {
-         case 0x00: f |= F_HALFCARRY;
-                    addressWrite(hl, 0xFF);
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    addressWrite(hl, 0x0F);
-                    break;
-         case 0x01: f |= F_ZERO;
-                    addressWrite(hl, 0x00);
-                    break;
-         default:   addressWrite(hl, dat - 1);
-                    break;
-        }
-        break;
-    case 0x36 :               // LD (HL), nn
-        pc += 2;
-        addressWrite(hl, b2);
-        break;
-    case 0x37 :               // SCF
-        pc++;
-        f &= F_ZERO;
-        f |= F_CARRY;
-        break;
-    case 0x38 :               // JR C, nn
-        if ((f & F_CARRY) == F_CARRY) {
-         pc += 2 + offset;
-        } else {
-         pc += 2;
-        }
-        break;
-    case 0x39 :               // ADD HL, SP      ** Could be wrong **
-        pc++;
-        hl = (hl + sp);
-        if ((hl & 0xFFFF0000) != 0) {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)) | (F_CARRY));
-         hl &= 0xFFFF;
-        } else {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)));
-        }
-        break;
-    case 0x3A :               // LD A, (HL-)
-        pc++;
-        a = Bits.unsign(addressRead(hl));
-        hl = (hl - 1) & 0xFFFF;
-        break;
-    case 0x3B :               // DEC SP
-        pc++;
-        sp = (sp - 1) & 0xFFFF;
-        break;
-    case 0x3C :               // INC A
-        pc++;
-        f &= F_CARRY;
-        switch (a) {
-         case 0xFF: f |= F_HALFCARRY + F_ZERO;
-                    a = 0x00;
-                    break;
-         case 0x0F: f |= F_HALFCARRY;
-                    a = 0x10;
-                    break;
-         default:   a++;
-                    break;
-        }
-        break;
-    case 0x3D :               // DEC A
-        pc++;
-        f &= F_CARRY;
-        f |= F_SUBTRACT;
-        switch (a) {
-         case 0x00: f |= F_HALFCARRY;
-                    a = 0xFF;
-                    break;
-         case 0x10: f |= F_HALFCARRY;
-                    a = 0x0F;
-                    break;
-         case 0x01: f |= F_ZERO;
-                    a = 0x00;
-                    break;
-         default:   a--;
-                    break;
-        }
-        break;
-    case 0x3E :               // LD A, nn
-        pc += 2;
-        a = b2;
-        break;
-    case 0x3F :               // CCF
-        pc++;
-        if ((f & F_CARRY) == 0) {
-         f = (short) ((f & F_ZERO) | F_CARRY);
-        } else {
-         f = (short) (f & F_ZERO);
-        }
-        break;
-    case 0x52 :               // Debug breakpoint (LD D, D)
-	    // As this insturction is used in games (why?) only break here if the breakpoint is on in the debugger
-		if (breakpointEnable) {
-         terminate = true;
-         System.out.println("- Breakpoint reached");
-		} else {
-		 pc++;
-		}
-        break;
-
-    case 0x76 :               // HALT
- 	    interruptsEnabled = true;
-//		System.out.println("Halted, pc = " + Bits.hexWord(pc));
-        while (ioHandler.registers[0x0F] == 0) {
-         initiateInterrupts();
-         instrCount++;
-        }
-
-//		System.out.println("intrcount: " + instrCount + " IE: " + Bits.hexByte(ioHandler.registers[0xFF]));
-//		System.out.println(" Finished halt");
-        pc++;
-        break;
-    case 0xAF :               // XOR A, A (== LD A, 0)
-        pc ++;
-        a = 0;
-        f = 0x80;             // Set zero flag
-        break;
-    case 0xC0 :               // RET NZ
-        if ((f & F_ZERO) == 0) {
-         pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-         sp += 2;
-        } else {
-         pc++;
-        }
-        break;
-    case 0xC1 :               // POP BC
-        pc++;
-        c = Bits.unsign(addressRead(sp));
-        b = Bits.unsign(addressRead(sp + 1));
-        sp+=2;
-        break;
-    case 0xC2 :               // JP NZ, nnnn
-        if ((f & F_ZERO) == 0) {
-         pc = (b3 << 8) + b2;
-        } else {
-         pc += 3;
-        }
-        break;
-    case 0xC3 :
-        pc = (b3 << 8) + b2;  // JP nnnn
-        break;
-    case 0xC4 :               // CALL NZ, nnnnn
-        if ((f & F_ZERO) == 0) {
-         pc += 3;
-         sp -= 2;
-         addressWrite(sp + 1, pc >> 8);
-         addressWrite(sp, pc & 0x00FF);
-         pc = (b3 << 8) + b2;
-        } else {
-         pc+=3;
-        }
-        break;
-    case 0xC5 :               // PUSH BC
-        pc++;
-        sp -= 2;
-        sp &= 0xFFFF;
-        addressWrite(sp, c);
-        addressWrite(sp + 1, b);
-        break;
-    case 0xC6 :               // ADD A, nn
-        pc+=2;
-        f = 0;
-
-        if ((((a & 0x0F) + (b2 & 0x0F)) & 0xF0) != 0x00) {
-         f |= F_HALFCARRY;
-        }
-
-        a += b2;
-
-        if ((a & 0xFF00) != 0) {     // Perform 8-bit overflow and set zero flag
-         if (a == 0x0100) {
-          f |= F_ZERO + F_CARRY + F_HALFCARRY;
-          a = 0;
-         } else {
-          f |= F_CARRY + F_HALFCARRY;
-          a &= 0x00FF;
-         }
-        }
-        break;
-    case 0xCF :               // RST 08
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x08;
-        break;
-    case 0xC8 :               // RET Z
-        if ((f & F_ZERO) == F_ZERO) {
-         pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-         sp += 2;
-        } else {
-         pc++;
-        }
-        break;
-    case 0xC9 :               // RET
-        pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-        sp += 2;
-        break;
-    case 0xCA :               // JP Z, nnnn
-        if ((f & F_ZERO) == F_ZERO) {
-         pc = (b3 << 8) + b2;
-        } else {
-         pc += 3;
-        }
-        break;
-    case 0xCB :               // Shift/bit test
-        pc += 2;
-        int regNum = b2 & 0x07;
-        int data = registerRead(regNum);
-//        System.out.println("0xCB instr! - reg " + Bits.hexByte((short) (b2 & 0xF4)));
-        if ((b2 & 0xC0) == 0) {
-         switch ((b2 & 0xF8)) {
-          case 0x00 :          // RLC A
-           if ((data & 0x80) == 0x80) {
-            f = F_CARRY;
-           } else {
-            f = 0;
-           }
-           data <<= 1;
-           if ((f & F_CARRY) == F_CARRY) {
-            data |= 1;
-           }
-
-           data &= 0xFF;
-           if (data == 0) {
-            f |= F_ZERO;
-           }
-           registerWrite(regNum, data);
-           break;
-          case 0x08 :          // RRC A
-           if ((data & 0x01) == 0x01) {
-            f = F_CARRY;
-           } else {
-            f = 0;
-           }
-           data >>= 1;
-           if ((f & F_CARRY) == F_CARRY) {
-            data |= 0x80;
-           }
-           if (data == 0) {
-            f |= F_ZERO;
-           }
-           registerWrite(regNum, data);
-           break;
-          case 0x10 :          // RL r
-   
-           if ((data & 0x80) == 0x80) {
-            newf = F_CARRY;
-           } else {
-            newf = 0;
-           }
-           data <<= 1;
-          
-           if ((f & F_CARRY) == F_CARRY) {
-            data |= 1;
-           }
-
-           data &= 0xFF;
-           if (data == 0) {
-            newf |= F_ZERO;
-           }
-           f = newf;
-           registerWrite(regNum, data);
-           break;
-          case 0x18 :          // RR r
-           if ((data & 0x01) == 0x01) {
-            newf = F_CARRY;
-           } else {
-            newf = 0;
-           }
-           data >>= 1;
-  
-           if ((f & F_CARRY) == F_CARRY) {
-            data |= 0x80;
-           }
-      
-           if (data == 0) {
-            newf |= F_ZERO;
-           }
-           f = newf;
-           registerWrite(regNum, data);
-           break;
-          case 0x20 :          // SLA r
-           if ((data & 0x80) == 0x80) {
-            f = F_CARRY;
-           } else {
-            f = 0;
-           }
-
-           data <<= 1;
-  
-           data &= 0xFF;
-           if (data == 0) {
-            f |= F_ZERO;
-           }
-           registerWrite(regNum, data);
-           break;
-          case 0x28 :          // SRA r
-           short topBit = 0;
-
-           topBit = (short) (data & 0x80);
-           if ((data & 0x01) == 0x01) {
-            f = F_CARRY;
-           } else {
-            f = 0;
-           }
-
-           data >>= 1;
-           data |= topBit;
-
-           if (data == 0) {
-            f |= F_ZERO;
-           }
-           registerWrite(regNum, data);
-           break;
-          case 0x30 :          // SWAP r
-  
-           data = (short) (((data & 0x0F) << 4) | ((data & 0xF0) >> 4));
-           if (data == 0) {
-            f = F_ZERO;
-           } else {
-            f = 0;
-           }
-//           System.out.println("SWAP - answer is " + Bits.hexByte(data));
-           registerWrite(regNum, data);
-           break;
-          case 0x38 :          // SRL r
-           if ((data & 0x01) == 0x01) {
-            f = F_CARRY;
-           } else {
-            f = 0;
-           }
-
-           data >>= 1;
-
-           if (data == 0) {
-            f |= F_ZERO;
-           }
-           registerWrite(regNum, data);
-           break;
-          }
-        } else {
-
-         int bitNumber = (b2 & 0x38) >> 3;
-
-         if ((b2 & 0xC0) == 0x40)  {  // BIT n, r
-          mask = (short) (0x01 << bitNumber);
-          if ((data & mask) != 0) {
-           f = (short) ((f & F_CARRY) | F_HALFCARRY);
-          } else {
-           f = (short) ((f & F_CARRY) | (F_HALFCARRY + F_ZERO));
-          }
-         }
-         if ((b2 & 0xC0) == 0x80) {  // RES n, r
-          mask = (short) (0xFF - (0x01 << bitNumber));
-          data = (short) (data & mask);
-          registerWrite(regNum, data);
-         }
-         if ((b2 & 0xC0) == 0xC0) {  // SET n, r
-          mask = (short) (0x01 << bitNumber);
-          data = (short) (data | mask);
-          registerWrite(regNum, data);
-         }
-
-        }
-
-        break;
-    case 0xCC :               // CALL Z, nnnnn
-        if ((f & F_ZERO) == F_ZERO) {
-         pc += 3;
-         sp -= 2;
-         addressWrite(sp + 1, pc >> 8);
-         addressWrite(sp, pc & 0x00FF);
-         pc = (b3 << 8) + b2;
-        } else {
-         pc+=3;
-        }
-        break;
-    case 0xCD :               // CALL nnnn
-        pc += 3;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = (b3 << 8) + b2;
-        break;
-    case 0xCE :               // ADC A, nn
-        pc+=2;
-
-        if ((f & F_CARRY) != 0) {
-         b2++;
-        }
-        f = 0;
-
-        if ((((a & 0x0F) + (b2 & 0x0F)) & 0xF0) != 0x00) {
-         f |= F_HALFCARRY;
-        }
-
-        a += b2;
-
-        if ((a & 0xFF00) != 0) {     // Perform 8-bit overflow and set zero flag
-         if (a == 0x0100) {
-          f |= F_ZERO + F_CARRY + F_HALFCARRY;
-          a = 0;
-         } else {
-          f |= F_CARRY + F_HALFCARRY;
-          a &= 0x00FF;
-         }
-        }
-        break;
-    case 0xC7 :               // RST 00
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-//        terminate = true;
-        pc = 0x00;
-        break;
-    case 0xD0 :               // RET NC
-        if ((f & F_CARRY) == 0) {
-         pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-         sp += 2;
-        } else {
-         pc++;
-        }
-        break;
-    case 0xD1 :               // POP DE
-        pc++;
-        e = Bits.unsign(addressRead(sp));
-        d = Bits.unsign(addressRead(sp + 1));
-        sp+=2;
-        break;
-    case 0xD2 :               // JP NC, nnnn
-        if ((f & F_CARRY) == 0) {
-         pc = (b3 << 8) + b2;
-        } else {
-         pc += 3;
-        }
-        break;
-    case 0xD4 :               // CALL NC, nnnn
-        if ((f & F_CARRY) == 0) {
-         pc += 3;
-         sp -= 2;
-         addressWrite(sp + 1, pc >> 8);
-         addressWrite(sp, pc & 0x00FF);
-         pc = (b3 << 8) + b2;
-        } else {
-         pc+=3;
-        }
-        break;
-    case 0xD5 :               // PUSH DE
-        pc++;
-        sp -= 2;
-        sp &= 0xFFFF;
-        addressWrite(sp, e);
-        addressWrite(sp + 1, d);
-        break;
-    case 0xD6 :               // SUB A, nn
-        pc+=2;
-
-        f = F_SUBTRACT;
-
-        if ((((a & 0x0F) - (b2 & 0x0F)) & 0xFFF0) != 0x00) {
-         f |= F_HALFCARRY;
-        }
-
-        a -= b2;
-
-        if ((a & 0xFF00) != 0) {
-         a &= 0x00FF;
-         f |= F_CARRY;
-         }
-         if (a == 0) {
-          f |= F_ZERO;
-         }
-         break;
-    case 0xD7 :               // RST 10
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x10;
-        break;
-    case 0xD8 :               // RET C
-        if ((f & F_CARRY) == F_CARRY) {
-         pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-         sp += 2;
-        } else {
-         pc++;
-        }
-        break;
-    case 0xD9 :               // RETI
-        interruptsEnabled = true;
-        inInterrupt = false;
-        pc = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-        sp += 2;
-        break;
-    case 0xDA :               // JP C, nnnn
-        if ((f & F_CARRY) == F_CARRY) {
-         pc = (b3 << 8) + b2;
-        } else {
-         pc += 3;
-        }
-        break;
-    case 0xDC :               // CALL C, nnnn
-        if ((f & F_CARRY) == F_CARRY) {
-         pc += 3;
-         sp -= 2;
-         addressWrite(sp + 1, pc >> 8);
-         addressWrite(sp, pc & 0x00FF);
-         pc = (b3 << 8) + b2;
-        } else {
-         pc+=3;
-        }
-        break;
-    case 0xDE :               // SBC A, nn
-        pc+=2;
-        if ((f & F_CARRY) != 0) {
-         b2++;
-        }
-
-        f = F_SUBTRACT;
-        if ((((a & 0x0F) - (b2 & 0x0F)) & 0xFFF0) != 0x00) {
-         f |= F_HALFCARRY;
-        }
-
-        a -= b2;
-
-        if ((a & 0xFF00) != 0) {
-         a &= 0x00FF;
-         f |= F_CARRY;
-        }
-
-        if (a == 0) {
-         f |= F_ZERO;
-        }
-        break;
-    case 0xDF :               // RST 18
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x18;
-        break;
-    case 0xE0 :               // LDH (FFnn), A
-        pc += 2;
-        addressWrite(0xFF00 + b2, a);
-        break;
-    case 0xE1 :               // POP HL
-        pc++;
-        hl = (Bits.unsign(addressRead(sp + 1)) << 8) + Bits.unsign(addressRead(sp));
-        sp += 2;
-        break;
-    case 0xE2 :               // LDH (FF00 + C), A
-        pc++;
-        addressWrite(0xFF00 + c, a);
-        break;
-    case 0xE5 :               // PUSH HL
-        pc++;
-        sp -= 2;
-        sp &= 0xFFFF;
-        addressWrite(sp + 1, hl >> 8);
-        addressWrite(sp, hl & 0x00FF);
-        break;
-    case 0xE6 :               // AND nn
-        pc+=2;
-        a &= b2;
-        if (a == 0) {
-         f = F_ZERO;
-        } else {
-         f = 0;
-        }
-        break;
-    case 0xE7 :               // RST 20
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x20;
-        break;
-    case 0xE8 :               // ADD SP, nn
-        pc+=2;
-        sp = (sp + offset);
-        if ((sp & 0xFFFF0000) != 0) {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)) | (F_CARRY));
-         sp &= 0xFFFF;
-        } else {
-         f = (short) ((f & (F_SUBTRACT + F_ZERO + F_HALFCARRY)));
-        }
-        break;
-    case 0xE9 :               // JP (HL)
-        pc++;
-        pc = hl;
-        break;
-    case 0xEA :               // LD (nnnn), A
-        pc += 3;              
-        addressWrite((b3 << 8) + b2, a);
-        break;
-    case 0xEE :               // XOR A, nn
-        pc+=2;
-        a ^= b2;
-        if (a == 0) {
-         f = F_ZERO;
-        } else {
-         f = 0;
-        }
-        break;
-    case 0xEF :               // RST 28
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x28;
-        break;
-    case 0xF0 :               // LDH A, (FFnn)
-        pc += 2;
-        a = Bits.unsign(addressRead(0xFF00 + b2));
-        break;
-    case 0xF1 :               // POP AF
-        pc++;
-        f = Bits.unsign(addressRead(sp));
-        a = Bits.unsign(addressRead(sp + 1));
-        sp+=2;
-        break;
-    case 0xF2 :               // LD A, (FF00 + C)
-        pc++;
-        a = Bits.unsign(addressRead(0xFF00 + c));
-        break;
-    case 0xF3 :               // DI
-        pc++;
-        interruptsEnabled = false;
-    //    addressWrite(0xFFFF, 0);
-        break;
-    case 0xF5 :               // PUSH AF
-        pc++;
-        sp -= 2;
-        sp &= 0xFFFF;
-        addressWrite(sp, f);
-        addressWrite(sp + 1, a);
-        break;
-    case 0xF6 :               // OR A, nn
-        pc+=2;
-        a |= b2;
-        if (a == 0) {
-         f = F_ZERO;
-        } else {
-         f = 0;
-        }
-        break;
-    case 0xF7 :               // RST 30
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x30;
-        break;
-    case 0xF8 :               // LD HL, SP + nn  ** HALFCARRY FLAG NOT SET ***
-        pc += 2;
-        hl = (sp + offset);
-        if ((hl & 0x10000) != 0) {
-         f = F_CARRY;
-         hl &= 0xFFFF;
-        } else {
-         f = 0;
-        }
-        break;
-    case 0xF9 :               // LD SP, HL
-        pc++;
-        sp = hl;
-        break;
-    case 0xFA :               // LD A, (nnnn)
-        pc+=3;
-        a = Bits.unsign(addressRead((b3 << 8) + b2));
-        break;
-    case 0xFB :               // EI
-        pc++;
-        ieDelay = 1;
-      //  interruptsEnabled = true;
-      //  addressWrite(0xFFFF, 0xFF);
-        break;
-    case 0xFE :               // CP nn     ** FLAGS ARE WRONG! **
-        pc += 2;
-        f = 0;
-        if (b2 == a) {
-         f |= F_ZERO;
-        } else {
-         if (a < b2) {
-          f |= F_CARRY;
-         }
-        }
-        break;
-    case 0xFF :               // RST 38
-        pc++;
-        sp -= 2;
-        addressWrite(sp + 1, pc >> 8);
-        addressWrite(sp, pc & 0x00FF);
-        pc = 0x38;
-        break;
-
-    default :
-
-        if ((b1 & 0xC0) == 0x80) {       // Byte 0x10?????? indicates ALU op
-         pc++;
-         int operand = registerRead(b1 & 0x07);
-         switch ((b1 & 0x38) >> 3) {
-          case 1 : // ADC A, r
-              if ((f & F_CARRY) != 0) {
-               operand++;
-              }
-              // Note!  No break!
-          case 0 : // ADD A, r
-
-              f = 0;
-
-              if ((((a & 0x0F) + (operand & 0x0F)) & 0xF0) != 0x00) {
-               f |= F_HALFCARRY;
-              }
-
-              a += operand;
-
-              if (a == 0) {
-               f |= F_ZERO;
-              }
-
-              if ((a & 0xFF00) != 0) {     // Perform 8-bit overflow and set zero flag
-               if (a == 0x0100) {
-                f |= F_ZERO + F_CARRY + F_HALFCARRY;
-                a = 0;
-               } else {
-                f |= F_CARRY + F_HALFCARRY;
-                a &= 0x00FF;
-               }
-              }
-              break;
-          case 3 : // SBC A, r
-              if ((f & F_CARRY) != 0) {
-               operand++;
-              }
-              // Note! No break!
-          case 2 : // SUB A, r
-
-              f = F_SUBTRACT;
-
-              if ((((a & 0x0F) - (operand & 0x0F)) & 0xFFF0) != 0x00) {
-               f |= F_HALFCARRY;
-              }
-
-              a -= operand;
-
-              if ((a & 0xFF00) != 0) {
-               a &= 0x00FF;
-               f |= F_CARRY;
-              }
-              if (a == 0) {
-               f |= F_ZERO;
-              }
-
-              break;
-          case 4 : // AND A, r
-              a &= operand;
-              if (a == 0) {
-               f = F_ZERO;
-              } else {
-               f = 0;
-              }
-              break;
-          case 5 : // XOR A, r
-              a ^= operand;
-              if (a == 0) {
-               f = F_ZERO;
-              } else {
-               f = 0;
-              }
-              break;
-          case 6 : // OR A, r
-              a |= operand;
-              if (a == 0) {
-               f = F_ZERO;
-              } else {
-               f = 0;
-              }
-              break;
-          case 7 : // CP A, r (compare)
-              f = F_SUBTRACT;
-              if (a == operand) {
-               f |= F_ZERO;
-              }
-              if (a < operand) {
-               f |= F_CARRY;
-              }
-              if ((a & 0x0F) < (operand & 0x0F)) {
-               f |= F_HALFCARRY;
-              }
-              break;
-         }
-        } else if ((b1 & 0xC0) == 0x40) {   // Byte 0x01xxxxxxx indicates 8-bit ld
-
-         pc++;
-         registerWrite((b1 & 0x38) >> 3, registerRead(b1 & 0x07));
-
-        } else {
-         System.out.println("Unrecognized opcode (" + Bits.hexByte(b1) + ")");
-         terminate = true;
-         pc++;
-         break;
-        }
+   if (halted) {
+    if ((io[0x0F] & io[0xFF] & 0x1F) != 0) halted = false;     // réveil : IF & IE
+   } else {
+    t[rd(pc)].execute(this);
+    pc &= 0xFFFF;
    }
 
-    
    if (ieDelay != -1) {
-
-    if (ieDelay > 0) {
-     ieDelay--;
-    } else {
-     interruptsEnabled = true;
-     ieDelay = -1;
-    }
-
+    if (ieDelay > 0) ieDelay--;
+    else { interruptsEnabled = true; ieDelay = -1; }
    }
-
-
-   if (interruptsEnabled) {
-    checkInterrupts();
-   }
-
-   cartridge.update();
-
+   if (interruptsEnabled && !halted) checkInterrupts();
 
    initiateInterrupts();
-
-
-/*   if ((hl & 0xFFFF0000) != 0) {
-    terminate = true;
-    System.out.println("Overflow in HL!");
-   }*/
-
   }
   running = false;
   terminate = false;
