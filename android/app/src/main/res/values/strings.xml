@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JavaBoy</string>
+    <string name="open_rom">Ouvrir une ROM</string>
+    <string name="library">Bibliothèque</string>
+    <string name="settings">Réglages</string>
+    <string name="reset">Reset</string>
+    <string name="save_state">Sauvegarder l\'état</string>
+    <string name="load_state">Charger l\'état</string>
+    <string name="no_rom">Aucune ROM chargée. Menu ▸ Ouvrir une ROM.</string>
+    <string name="invalid_rom">ROM invalide : %1$s</string>
+    <string name="bad_checksum">Checksum invalide : la ROM peut mal fonctionner.</string>
+    <string name="state_saved">État sauvegardé</string>
+    <string name="state_loaded">État chargé</string>
+    <string name="no_state">Aucun état sauvegardé pour ce jeu</string>
+    <string name="favorites">Favoris</string>
+    <string name="recent">Récents</string>
+    <string name="sort_name">Trier par nom</string>
+    <string name="sort_recent">Trier par dernière partie</string>
+</resources>

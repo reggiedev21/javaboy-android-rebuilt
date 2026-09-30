@@ -11,3 +11,7 @@ tasks.test {
     useJUnitPlatform()
     testLogging { events("passed", "skipped", "failed") }
 }
+
+// Le cœur vise le bytecode Java 17 (records + sealed) pour rester consommable par D8/Android ;
+// les tests, eux, utilisent Java 21 (switch à motifs).
+tasks.compileJava { options.release.set(17) }
