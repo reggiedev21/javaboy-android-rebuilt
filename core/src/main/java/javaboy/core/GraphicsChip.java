@@ -37,6 +37,7 @@ public final class GraphicsChip {
     private final boolean[] spriteDrawn = new boolean[WIDTH];
     private final int[] spriteOrder = new int[10];
     private int windowLine;
+    private int[] scheme = Emulator.SCHEME_COLOURS[0].clone();
 
     public GraphicsChip(Dmgcpu cpu) {
         this.cpu = cpu;
@@ -57,9 +58,34 @@ public final class GraphicsChip {
 
     /** Applique un jeu de 12 couleurs ARGB (BG, OBJ0, OBJ1) en mode DMG. */
     public void setColourScheme(int[] scheme) {
+        this.scheme = scheme.clone();
         backgroundPalette.setColours(scheme[0], scheme[1], scheme[2], scheme[3]);
         obj1Palette.setColours(scheme[4], scheme[5], scheme[6], scheme[7]);
         obj2Palette.setColours(scheme[8], scheme[9], scheme[10], scheme[11]);
+    }
+
+    /** Jeu de couleurs DMG courant (12 ARGB). */
+    public int[] currentScheme() { return scheme.clone(); }
+
+    /** Palettes pour les save states : 12 couleurs DMG puis 32 + 32 couleurs RGB555 GBC. */
+    int[] exportPalettes() {
+        int[] out = new int[12 + 64];
+        System.arraycopy(scheme, 0, out, 0, 12);
+        for (int p = 0; p < 8; p++) for (int e = 0; e < 4; e++) {
+            out[12 + p * 4 + e] = gbcBackground[p].getGbcRaw(e);
+            out[44 + p * 4 + e] = gbcSprite[p].getGbcRaw(e);
+        }
+        return out;
+    }
+
+    void importPalettes(int[] in) {
+        int[] dmg = new int[12];
+        System.arraycopy(in, 0, dmg, 0, 12);
+        setColourScheme(dmg);
+        for (int p = 0; p < 8; p++) for (int e = 0; e < 4; e++) {
+            gbcBackground[p].setGbcRaw(e, in[12 + p * 4 + e]);
+            gbcSprite[p].setGbcRaw(e, in[44 + p * 4 + e]);
+        }
     }
 
     public void reset() {

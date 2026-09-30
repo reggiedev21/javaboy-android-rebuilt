@@ -70,6 +70,50 @@ public final class Emulator {
     /** Demande à l'appel en cours de execute()/runFrame() de rendre la main. */
     public void stop() { cpu.terminateProcess(); }
 
+    /** Instantané immuable de l'état courant. */
+    public SaveState saveState() {
+        Cartridge cart = cartridge;
+        GraphicsChip g = cpu.graphicsChip;
+        int[] pal = g.exportPalettes();
+        SaveState.CpuRegisters regs = new SaveState.CpuRegisters(cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.f, cpu.hl, cpu.sp, cpu.pc,
+                cpu.interruptsEnabled, cpu.ieDelay, cpu.halted, cpu.instrCount,
+                cpu.gbcFeatures, cpu.gbcRamBank, g.vidRamStart / 0x2000, cpu.timaEnabled, cpu.instrsPerTima,
+                cpu.INSTRS_PER_HBLANK != cpu.BASE_INSTRS_PER_HBLANK, cpu.ioHandler.hdmaRunning);
+        SaveState.MapperState mapper = new SaveState.MapperState(cart.currentBank, cart.ramBank, cart.ramEnabled, cart.mbc1LargeRamMode);
+        return new SaveState(SaveState.VERSION, cart.getCartName(), regs, cpu.mainRam, g.videoRam, cpu.oam,
+                cpu.ioHandler.registers, cart.ram, mapper, pal);
+    }
+
+    /** Restaure un instantané (doit provenir de la même ROM). */
+    public void loadState(SaveState st) {
+        if (!st.cartName().equals(cartridge.getCartName()))
+            throw new IllegalArgumentException("Save state d'une autre ROM : " + st.cartName());
+        SaveState.CpuRegisters r = st.cpu();
+        cpu.a = r.a(); cpu.b = r.b(); cpu.c = r.c(); cpu.d = r.d(); cpu.e = r.e(); cpu.f = r.f();
+        cpu.hl = r.hl(); cpu.sp = r.sp(); cpu.pc = r.pc();
+        cpu.interruptsEnabled = r.ime(); cpu.ieDelay = r.ieDelay(); cpu.halted = r.halted(); cpu.instrCount = r.instrCount();
+        cpu.gbcFeatures = r.gbc(); cpu.gbcRamBank = r.gbcRamBank(); cpu.timaEnabled = r.timaEnabled(); cpu.instrsPerTima = r.instrsPerTima();
+        cpu.setDoubleSpeedCpu(r.doubleSpeed());
+        cpu.ioHandler.hdmaRunning = r.hdmaRunning();
+        System.arraycopy(st.mainRam(), 0, cpu.mainRam, 0, cpu.mainRam.length);
+        GraphicsChip g = cpu.graphicsChip;
+        System.arraycopy(st.videoRam(), 0, g.videoRam, 0, g.videoRam.length);
+        g.vidRamStart = r.vramBank() * 0x2000;
+        System.arraycopy(st.oam(), 0, cpu.oam, 0, cpu.oam.length);
+        System.arraycopy(st.cartRam(), 0, cartridge.ram, 0, cartridge.ram.length);
+        // Rejoue les registres d'E/S pour reconstruire palettes, son et timers
+        byte[] io = st.ioRegisters();
+        for (int reg = 0; reg < 0x100; reg++) {
+            if (reg == 0x46 || reg == 0x55 || reg == 0x69 || reg == 0x6B || reg == 0x04 || reg == 0x02 || reg == 0x00) continue; // DMA, palettes GBC, DIV, série, joypad : copie brute
+            cpu.ioHandler.ioWrite(reg, (short) (io[reg] & 0xFF));
+        }
+        System.arraycopy(io, 0, cpu.ioHandler.registers, 0, io.length);
+        SaveState.MapperState m = st.mapper();
+        cartridge.mapRom(m.currentBank()); cartridge.ramBank = m.ramBank(); cartridge.ramPageStart = m.ramBank() * 0x2000;
+        cartridge.ramEnabled = m.ramEnabled(); cartridge.mbc1LargeRamMode = m.mbc1LargeRamMode();
+        g.importPalettes(st.paletteColours());
+    }
+
     /** Signale un appui/relâchement à la puce d'E/S (interruption joypad). */
     public void setButton(Joypad.Button b, boolean pressed) {
         joypad.set(b, pressed);

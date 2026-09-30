@@ -34,6 +34,16 @@ public final class GameboyPalette {
         colours[entryNo] = rgb555ToArgb(gbcData[entryNo]);
     }
 
+    /** Couleur RGB555 brute d'une entrée (save states). */
+    public int getGbcRaw(int entryNo) { return gbcData[entryNo]; }
+
+    /** Restaure une couleur RGB555 brute et recalcule l'ARGB (save states). */
+    public void setGbcRaw(int entryNo, int rgb555) {
+        gbcData[entryNo] = rgb555 & 0xFFFF;
+        data[entryNo] = entryNo;
+        colours[entryNo] = rgb555ToArgb(gbcData[entryNo]);
+    }
+
     /** Conversion pure RGB555 -> ARGB 8888 (chaque composante 5 bits est décalée de 3). */
     public static int rgb555ToArgb(int rgb555) {
         int red   = (rgb555 & 0x001F) << 3;
