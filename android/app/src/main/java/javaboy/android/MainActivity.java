@@ -99,7 +99,7 @@ public final class MainActivity extends AppCompatActivity {
         byte[] bytes;
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in == null) throw new IOException("flux nul");
-            bytes = in.readAllBytes();
+            bytes = RomArchive.unwrap(in.readAllBytes());
         } catch (IOException e) {
             Toast.makeText(this, getString(R.string.invalid_rom, e.getMessage()), Toast.LENGTH_LONG).show();
             return;
@@ -164,7 +164,7 @@ public final class MainActivity extends AppCompatActivity {
         menu.getMenu().add(0, 6, 5, R.string.settings);
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
-                case 1 -> openRom.launch(new String[]{"application/octet-stream", "*/*"});
+                case 1 -> openRom.launch(new String[]{"*/*"});
                 case 2 -> startActivity(new Intent(this, LibraryActivity.class));
                 case 3 -> { if (vm.emulator != null) vm.emulator.reset(); }
                 case 4 -> saveState();

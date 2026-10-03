@@ -15,6 +15,7 @@ public final class Assertions {
     public static void assertFalse(boolean c, String m) { if (c) throw new AssertionError(m); }
     public static void assertNotNull(Object o) { if (o == null) throw new AssertionError("null"); }
     public static void assertArrayEquals(int[] e, int[] a) { if (!java.util.Arrays.equals(e, a)) throw new AssertionError("arrays differ"); }
+    public static void assertArrayEquals(byte[] e, byte[] a) { if (!java.util.Arrays.equals(e, a)) throw new AssertionError("arrays differ"); }
     public static void fail(String m) { throw new AssertionError(m); }
     public static <T extends Throwable> T assertThrows(Class<T> c, Runnable r) {
         try { r.run(); } catch (Throwable t) { if (c.isInstance(t)) return c.cast(t); throw new AssertionError("wrong exception " + t); }

@@ -74,7 +74,7 @@ public final class DesktopMain extends JFrame {
         stopEmulation();
         byte[] bytes;
         try {
-            bytes = Files.readAllBytes(path);
+            bytes = RomArchive.unwrap(Files.readAllBytes(path));
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Erreur de lecture", JOptionPane.ERROR_MESSAGE);
             return;
