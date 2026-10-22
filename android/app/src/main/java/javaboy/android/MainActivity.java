@@ -76,7 +76,7 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onPause() {
         super.onPause();
         if (vm.thread != null) { vm.thread.setPaused(true); if (vm.audio != null) vm.audio.pause(); }
-        if (vm.emulator != null) saveStore.saveBatteryRam(vm.emulator.getCartridge());
+        if (vm.emulator != null) saveStore.saveBatteryRam(vm.emulator);
     }
 
     private void applySettings(Settings s) {
@@ -148,7 +148,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void stopGame() {
         if (vm.thread != null) { vm.thread.shutdown(); vm.thread = null; }
-        if (vm.emulator != null) { saveStore.saveBatteryRam(vm.emulator.getCartridge()); vm.emulator = null; }
+        if (vm.emulator != null) { saveStore.saveBatteryRam(vm.emulator); vm.emulator = null; }
         if (vm.audio != null) { vm.audio.release(); vm.audio = null; }
     }
 
@@ -176,32 +176,29 @@ public final class MainActivity extends AppCompatActivity {
         menu.show();
     }
 
-    /** Le save state est pris entre deux images : on met la boucle en pause le temps de la copie. */
+    /** Emulator.saveState() attend la fin de l'image en cours (verrou du cœur) : l'instantané
+     *  est toujours cohérent, sans mettre la boucle en pause. */
     private void saveState() {
-        if (vm.emulator == null) return;
-        vm.thread.setPaused(true);
+        Emulator emu = vm.emulator;
+        if (emu == null) return;
         try {
-            saveStore.writeState(vm.emulator.getCartridge(), SLOT, vm.emulator.saveState());
+            saveStore.writeState(emu.getCartridge(), SLOT, emu.saveState());
             Toast.makeText(this, R.string.state_saved, Toast.LENGTH_SHORT).show();
         } catch (IOException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
-        } finally {
-            vm.thread.setPaused(false);
         }
     }
 
     private void loadState() {
-        if (vm.emulator == null) return;
-        vm.thread.setPaused(true);
+        Emulator emu = vm.emulator;
+        if (emu == null) return;
         try {
-            SaveState st = saveStore.readState(vm.emulator.getCartridge(), SLOT);
+            SaveState st = saveStore.readState(emu.getCartridge(), SLOT);
             if (st == null) { Toast.makeText(this, R.string.no_state, Toast.LENGTH_SHORT).show(); return; }
-            vm.emulator.loadState(st);
+            emu.loadState(st);   // appliqué entre deux images
             Toast.makeText(this, R.string.state_loaded, Toast.LENGTH_SHORT).show();
         } catch (IOException | IllegalArgumentException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
-        } finally {
-            vm.thread.setPaused(false);
         }
     }
 

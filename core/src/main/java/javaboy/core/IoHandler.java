@@ -176,30 +176,30 @@ public final class IoHandler {
    case 0x00 :           // FF00 - Joypad
     short output = 0x0F;
     if ((data & 0x10) == 0x00) {   // P14
-     if (joypad.isPressed(Joypad.Button.RIGHT)) {
+     if (joypad.isPressedInFrame(Joypad.Button.RIGHT)) {
       output &= ~1;
      }
-     if (joypad.isPressed(Joypad.Button.LEFT)) {
+     if (joypad.isPressedInFrame(Joypad.Button.LEFT)) {
       output &= ~2;
      }
-     if (joypad.isPressed(Joypad.Button.UP)) {
+     if (joypad.isPressedInFrame(Joypad.Button.UP)) {
       output &= ~4;
      }
-     if (joypad.isPressed(Joypad.Button.DOWN)) {
+     if (joypad.isPressedInFrame(Joypad.Button.DOWN)) {
       output &= ~8;
      }
     }
     if ((data & 0x20) == 0x00) {   // P15
-     if (joypad.isPressed(Joypad.Button.A)) {
+     if (joypad.isPressedInFrame(Joypad.Button.A)) {
       output &= ~0x01;
      }
-     if (joypad.isPressed(Joypad.Button.B)) {
+     if (joypad.isPressedInFrame(Joypad.Button.B)) {
       output &= ~0x02;
      }
-     if (joypad.isPressed(Joypad.Button.SELECT)) {
+     if (joypad.isPressedInFrame(Joypad.Button.SELECT)) {
       output &= ~0x04;
      }
-     if (joypad.isPressed(Joypad.Button.START)) {
+     if (joypad.isPressedInFrame(Joypad.Button.START)) {
       output &= ~0x08;
      }
     }

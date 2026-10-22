@@ -10,11 +10,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /** Exécute cpu_instrs.gb (Blargg) sans affichage et lit le verdict sur le port série.
  *  La ROM doit être déposée dans core/src/test/resources/roms/ (jamais versionnée). */
 class BlarggTest {
-    static final Path ROM = Path.of("core/src/test/resources/roms/cpu_instrs.gb");
+    static final Path ROM = RomFiles.find("cpu_instrs.gb");
 
     @Test
     void cpuInstrsPasses() throws IOException {
-        assumeTrue(Files.exists(ROM), "ROM Blargg absente : " + ROM);
+        assumeTrue(ROM != null, "ROM Blargg absente (cpu_instrs.gb) dans " + RomFiles.candidateDirs());
         Cartridge cart = TestRom.cartridge(Files.readAllBytes(ROM));
         Emulator emu = new Emulator(cart);
         SerialCapture serial = new SerialCapture();

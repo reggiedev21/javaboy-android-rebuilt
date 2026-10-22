@@ -137,7 +137,7 @@ public final class DesktopMain extends JFrame {
         emulator = null;
         emu.stop();
         try { emuThread.join(1000); } catch (InterruptedException ignored) { }
-        writeSav(emu.getCartridge());
+        writeSav(emu);
     }
 
     private Path savPath() {
@@ -151,9 +151,9 @@ public final class DesktopMain extends JFrame {
         try { if (Files.exists(savPath())) cart.loadBatteryRam(Files.readAllBytes(savPath())); } catch (IOException ignored) { }
     }
 
-    private void writeSav(Cartridge cart) {
-        if (!cart.canSave() || romPath == null) return;
-        try { Files.write(savPath(), cart.getBatteryRam()); } catch (IOException ignored) { }
+    private void writeSav(Emulator emu) {
+        if (!emu.getCartridge().canSave() || romPath == null) return;
+        try { Files.write(savPath(), emu.batteryRam()); } catch (IOException ignored) { }
     }
 
     private void installKeys() {

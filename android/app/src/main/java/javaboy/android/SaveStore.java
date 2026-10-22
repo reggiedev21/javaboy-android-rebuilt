@@ -2,6 +2,7 @@ package javaboy.android;
 
 import android.content.Context;
 import javaboy.core.Cartridge;
+import javaboy.core.Emulator;
 import javaboy.core.SaveState;
 
 import java.io.File;
@@ -29,9 +30,11 @@ public final class SaveStore {
         try { c.loadBatteryRam(Files.readAllBytes(f.toPath())); } catch (IOException ignored) { }
     }
 
-    public void saveBatteryRam(Cartridge c) {
+    /** Écrit le .sav à partir d'une copie prise entre deux images (sûr pendant l'émulation). */
+    public void saveBatteryRam(Emulator e) {
+        Cartridge c = e.getCartridge();
         if (!c.canSave()) return;
-        try { Files.write(new File(savDir, key(c) + ".sav").toPath(), c.getBatteryRam()); } catch (IOException ignored) { }
+        try { Files.write(new File(savDir, key(c) + ".sav").toPath(), e.batteryRam()); } catch (IOException ignored) { }
     }
 
     public File stateFile(Cartridge c, int slot) { return new File(stateDir, key(c) + "_" + slot + ".state"); }
