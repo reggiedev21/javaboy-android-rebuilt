@@ -2,7 +2,10 @@ plugins { id("com.android.application") }
 
 android {
     namespace = "javaboy.android"
-    compileSdk = 34
+    // 37 : imposé par les dépendances AndroidX du module :manette.
+    compileSdk {
+        version = release(37)
+    }
 
     defaultConfig {
         applicationId = "javaboy.android"
@@ -20,10 +23,32 @@ android {
     buildTypes {
         release { isMinifyEnabled = false }
     }
+
+    // demo : banque de jeux de Manette avec ses ROMs embarquées. Jamais publiée.
+    // play : version Play Store, aucune ROM embarquée ; la banque est remplacée par la
+    //        bibliothèque de l'émulateur (voir res/values/flavor.xml et ShellBinder).
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("demo") {
+            dimension = "distribution"
+            applicationIdSuffix = ".demo"
+            versionNameSuffix = "-demo"
+        }
+        create("play") {
+            dimension = "distribution"
+        }
+    }
+
+    sourceSets {
+        getByName("demo") {
+            assets.srcDir(rootDir.parentFile.resolve("third_party/Manette/app/src/main/assets"))
+        }
+    }
 }
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":manette"))
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel:2.8.6")

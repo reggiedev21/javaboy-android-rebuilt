@@ -4,21 +4,31 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
+        android:name=".App"
         android:allowBackup="true"
         android:label="@string/app_name"
         android:icon="@drawable/ic_launcher"
         android:theme="@style/Theme.JavaBoy">
 
+        <!-- Écrans de la bibliothèque Manette (module :manette). Les coques Game Boy sont
+             l'écran de jeu : l'émulateur s'y branche via ShellBinder. -->
         <activity
-            android:name=".MainActivity"
+            android:name="com.example.manette.MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:launchMode="singleTop">
+            android:theme="@style/Theme.Manette"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name="com.example.manette.Gameboy_color" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.game_boy_advance" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.Banque_de_jeu" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.Banque_de_style" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.mappage_manette" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.parametres" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.Paraetres_apropos" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
 
         <activity android:name=".LibraryActivity" android:label="@string/library" />
         <activity android:name=".SettingsActivity" android:label="@string/settings" />

@@ -1,0 +1,1312 @@
+diff --git a/android/README.md b/android/README.md
+index 00ee43d..bbe71ec 100644
+--- a/android/README.md
++++ b/android/README.md
+@@ -7,17 +7,28 @@ Le cœur est compilé en bytecode Java 17 (records, `sealed`) ; l'application au
+ Le code Android n'a pas encore été compilé : c'est la première chose à faire dans
+ Android Studio (Build ▸ Make Project) avant les tests sur téléphone (phase 6).
+ 
++## Manette (submodule) et variantes
++
++Le dépôt Manette du binôme est un submodule (`third_party/Manette`) compilé en bibliothèque
++par le module `:manette`. Ses coques Game Boy sont l'écran de jeu ; l'émulateur s'y branche
++via `ShellBinder`. Après un clone : `git submodule update --init`.
++
++- `demo` : banque de jeux de Manette avec ses ROMs — pour la démonstration uniquement.
++- `play` : aucune ROM embarquée — version destinée au Play Store.
++
++Détails : `docs/08-integration-manette.md`.
++
+ ## Structure
+ 
+ | Classe | Rôle |
+ |---|---|
+-| `MainActivity` | Écran de jeu, menu, sélecteur `ACTION_OPEN_DOCUMENT`, cycle de vie, save states |
+-| `EmulatorViewModel` | Conserve l'émulateur et son thread à travers les rotations |
++| `App`, `ShellBinder` | Branchent l'émulateur sur les coques Game Boy de Manette |
++| `ScreenDrawable` | Image 160×144 dessinée sur l'écran LCD de la coque |
++| `EmulatorSession` | Partie en cours (émulateur, thread, son), partagée par tous les écrans |
+ | `EmulationThread` | Boucle `runFrame()` à 60 Hz, pause/reprise, vitesse réglable |
+-| `GameView` | `SurfaceView` + `Bitmap` 160×144 mis à l'échelle entière |
+ | `AndroidAudioOutput` | `AudioTrack` derrière `javaboy.core.AudioOutput` |
+-| `TouchPad` | Manette multitouch, haptique, transparence, zones élargies |
+ | `RomLibrary` | Bibliothèque (records, streams, favoris, dernière partie) |
+ | `SaveStore` | `.sav` et `.state` dans le stockage interne |
+ | `Settings` | Record immuable + pipeline de filtres composable |
+ | `LibraryActivity`, `SettingsActivity` | IHM correspondantes |
++| `GameView`, `TouchPad` | Ancien écran plein écran, plus utilisés |
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index 00b21c8..c2e8a6b 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -2,7 +2,10 @@ plugins { id("com.android.application") }
+ 
+ android {
+     namespace = "javaboy.android"
+-    compileSdk = 34
++    // 37 : imposé par les dépendances AndroidX du module :manette.
++    compileSdk {
++        version = release(37)
++    }
+ 
+     defaultConfig {
+         applicationId = "javaboy.android"
+@@ -20,10 +23,32 @@ android {
+     buildTypes {
+         release { isMinifyEnabled = false }
+     }
++
++    // demo : banque de jeux de Manette avec ses ROMs embarquées. Jamais publiée.
++    // play : version Play Store, aucune ROM embarquée ; la banque est remplacée par la
++    //        bibliothèque de l'émulateur (voir res/values/flavor.xml et ShellBinder).
++    flavorDimensions += "distribution"
++    productFlavors {
++        create("demo") {
++            dimension = "distribution"
++            applicationIdSuffix = ".demo"
++            versionNameSuffix = "-demo"
++        }
++        create("play") {
++            dimension = "distribution"
++        }
++    }
++
++    sourceSets {
++        getByName("demo") {
++            assets.srcDir(rootDir.parentFile.resolve("third_party/Manette/app/src/main/assets"))
++        }
++    }
+ }
+ 
+ dependencies {
+     implementation(project(":core"))
++    implementation(project(":manette"))
+     implementation("androidx.appcompat:appcompat:1.7.0")
+     implementation("androidx.activity:activity:1.9.2")
+     implementation("androidx.lifecycle:lifecycle-viewmodel:2.8.6")
+diff --git a/android/app/src/demo/res/values/flavor.xml b/android/app/src/demo/res/values/flavor.xml
+new file mode 100644
+index 0000000..b3461c9
+--- /dev/null
++++ b/android/app/src/demo/res/values/flavor.xml
+@@ -0,0 +1,4 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <bool name="has_game_bank">true</bool>
++</resources>
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index dc3a68b..43c6d10 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -4,21 +4,31 @@
+     <uses-permission android:name="android.permission.VIBRATE" />
+ 
+     <application
++        android:name=".App"
+         android:allowBackup="true"
+         android:label="@string/app_name"
+         android:icon="@drawable/ic_launcher"
+         android:theme="@style/Theme.JavaBoy">
+ 
++        <!-- Écrans de la bibliothèque Manette (module :manette). Les coques Game Boy sont
++             l'écran de jeu : l'émulateur s'y branche via ShellBinder. -->
+         <activity
+-            android:name=".MainActivity"
++            android:name="com.example.manette.MainActivity"
+             android:exported="true"
+-            android:configChanges="orientation|screenSize|keyboardHidden"
+-            android:launchMode="singleTop">
++            android:theme="@style/Theme.Manette"
++            android:windowSoftInputMode="adjustResize">
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
+         </activity>
++        <activity android:name="com.example.manette.Gameboy_color" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.game_boy_advance" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.Banque_de_jeu" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.Banque_de_style" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.mappage_manette" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.parametres" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
++        <activity android:name="com.example.manette.Paraetres_apropos" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+ 
+         <activity android:name=".LibraryActivity" android:label="@string/library" />
+         <activity android:name=".SettingsActivity" android:label="@string/settings" />
+diff --git a/android/app/src/main/java/javaboy/android/App.java b/android/app/src/main/java/javaboy/android/App.java
+new file mode 100644
+index 0000000..664444c
+--- /dev/null
++++ b/android/app/src/main/java/javaboy/android/App.java
+@@ -0,0 +1,11 @@
++package javaboy.android;
++
++import android.app.Application;
++
++/** Point d'entrée du processus : branche l'émulateur sur les coques Game Boy de la bibliothèque Manette. */
++public final class App extends Application {
++    @Override public void onCreate() {
++        super.onCreate();
++        registerActivityLifecycleCallbacks(new ShellBinder(this));
++    }
++}
+diff --git a/android/app/src/main/java/javaboy/android/EmulatorSession.java b/android/app/src/main/java/javaboy/android/EmulatorSession.java
+new file mode 100644
+index 0000000..d6184c0
+--- /dev/null
++++ b/android/app/src/main/java/javaboy/android/EmulatorSession.java
+@@ -0,0 +1,212 @@
++package javaboy.android;
++
++import android.content.Context;
++import android.net.Uri;
++import android.widget.Toast;
++import javaboy.core.*;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.util.function.Consumer;
++import java.util.function.IntUnaryOperator;
++
++/** Partie en cours : émulateur, thread d'émulation et son.
++ *
++ *  <p>Une seule instance par processus, indépendante des écrans : changer de coque Game Boy
++ *  lance une autre Activity, la partie doit continuer. L'écran visible se branche avec
++ *  {@link #attachScreen} et pilote {@link #resume}/{@link #pause}.
++ *
++ *  <p>Toutes les méthodes sont appelées depuis le thread principal, sauf {@link #onFrame}
++ *  (thread d'émulation) et {@link #setButton} (tout thread). */
++public final class EmulatorSession {
++    private static final int SLOT = 0;
++    private static final String ASSET_PATH = "/android_asset/";
++
++    private static EmulatorSession instance;
++
++    public static synchronized EmulatorSession get(Context ctx) {
++        if (instance == null) instance = new EmulatorSession(ctx.getApplicationContext());
++        return instance;
++    }
++
++    /** URI désignant une ROM embarquée dans les assets (banque de jeux de démonstration). */
++    public static Uri assetUri(String assetName) {
++        return new Uri.Builder().scheme("file").authority("").path(ASSET_PATH + assetName).build();
++    }
++
++    private final Context app;
++    private final SaveStore saveStore;
++    private final int[] filtered = new int[GraphicsChip.WIDTH * GraphicsChip.HEIGHT];
++    private volatile IntUnaryOperator filter;
++    private volatile Consumer<int[]> screen;
++    private volatile Emulator emulator;
++    private EmulationThread thread;
++    private AndroidAudioOutput audio;
++    private Settings settings;
++    private boolean foreground;
++
++    private EmulatorSession(Context app) {
++        this.app = app;
++        saveStore = new SaveStore(app);
++        settings = Settings.load(app);
++        filter = settings.filter();
++    }
++
++    public boolean hasGame() { return emulator != null; }
++    public Settings settings() { return settings; }
++
++    // ------------------------------------------------------------ chargement
++
++    /** Charge une ROM et démarre la partie ; affiche un message en cas d'échec.
++     *  @return vrai si la partie a démarré. */
++    public boolean load(Uri uri) {
++        Cartridge cart;
++        try {
++            byte[] bytes;
++            try (InputStream in = open(uri)) { bytes = RomArchive.unwrap(readFully(in)); }
++            CartridgeResult result = Cartridge.load(bytes);
++            if (result instanceof CartridgeResult.Error err) throw new IOException(err.message());
++            CartridgeResult.Ok ok = (CartridgeResult.Ok) result;
++            if (!ok.checksumValid()) Toast.makeText(app, R.string.bad_checksum, Toast.LENGTH_SHORT).show();
++            cart = ok.cartridge();
++        } catch (IOException | SecurityException e) {
++            Toast.makeText(app, app.getString(R.string.invalid_rom, e.getMessage()), Toast.LENGTH_LONG).show();
++            return false;
++        }
++        start(cart, uri);
++        return true;
++    }
++
++    private InputStream open(Uri uri) throws IOException {
++        String path = uri.getPath();
++        if ("file".equals(uri.getScheme()) && path != null && path.startsWith(ASSET_PATH)) {
++            return app.getAssets().open(path.substring(ASSET_PATH.length()));
++        }
++        InputStream in = app.getContentResolver().openInputStream(uri);
++        if (in == null) throw new IOException("flux nul");
++        return in;
++    }
++
++    /** InputStream.readAllBytes() n'existe qu'à partir d'Android 13 (minSdk 26). */
++    private static byte[] readFully(InputStream in) throws IOException {
++        ByteArrayOutputStream out = new ByteArrayOutputStream(1 << 20);
++        byte[] buffer = new byte[1 << 16];
++        for (int n; (n = in.read(buffer)) != -1; ) out.write(buffer, 0, n);
++        return out.toByteArray();
++    }
++
++    private void start(Cartridge cart, Uri uri) {
++        stop();
++        saveStore.loadBatteryRam(cart);
++        AndroidAudioOutput out = new AndroidAudioOutput(Emulator.DEFAULT_SAMPLE_RATE);
++        Emulator emu = new Emulator(cart, new Joypad(), out, Emulator.DEFAULT_SAMPLE_RATE);
++        emu.setGbcAllowed(settings.gbcAllowed());
++        emu.reset();
++        emu.setFrameListener(this::onFrame);
++        emulator = emu;
++        audio = out;
++        applySettings(settings);
++        // Démarre en pause : la partie ne tourne que lorsqu'une coque est à l'écran.
++        out.pause();
++        thread = new EmulationThread(emu);
++        thread.setSpeedPercent(settings.speedPercent());
++        thread.setPaused(true);
++        thread.start();
++        new RomLibrary(app).recordPlay(uri, cart.getCartName(), cart.getCartTypeName(), cart.isGbc());
++        if (foreground) resume();
++    }
++
++    private void stop() {
++        if (thread != null) { thread.shutdown(); thread = null; }
++        if (emulator != null) { saveStore.saveBatteryRam(emulator); emulator = null; }
++        if (audio != null) { audio.release(); audio = null; }
++    }
++
++    // ------------------------------------------------------------ écran et manette
++
++    /** Destinataire des images 160×144 ARGB, appelé sur le thread d'émulation ; le tampon
++     *  est réutilisé d'une image à l'autre, le destinataire doit le copier. */
++    public void attachScreen(Consumer<int[]> s) { screen = s; }
++
++    /** Ne détache que si {@code s} est encore l'écran courant (une autre coque a pu prendre le relais). */
++    public void detachScreen(Consumer<int[]> s) { if (screen == s) screen = null; }
++
++    private void onFrame(int[] pixels) {
++        Consumer<int[]> s = screen;
++        if (s == null) return;
++        IntUnaryOperator f = filter;
++        if (f == Filters.IDENTITY) {
++            s.accept(pixels);
++        } else {
++            Filters.apply(f, pixels, filtered);
++            s.accept(filtered);
++        }
++    }
++
++    public void setButton(Joypad.Button button, boolean pressed) {
++        Emulator e = emulator;
++        if (e != null) e.setButton(button, pressed);
++    }
++
++    // ------------------------------------------------------------ cycle de vie
++
++    /** Une coque passe au premier plan : relit les réglages et relance la partie. */
++    public void resume() {
++        foreground = true;
++        Settings s = Settings.load(app);
++        if (!s.equals(settings)) applySettings(s);
++        if (thread != null) { thread.setPaused(false); audio.resume(); }
++    }
++
++    /** La coque quitte le premier plan : pause, boutons relâchés, RAM de cartouche sauvegardée. */
++    public void pause() {
++        foreground = false;
++        if (thread == null) return;
++        thread.setPaused(true);
++        audio.pause();
++        emulator.getJoypad().releaseAll();
++        saveStore.saveBatteryRam(emulator);
++    }
++
++    private void applySettings(Settings s) {
++        settings = s;
++        filter = s.filter();
++        if (emulator != null) {
++            emulator.setColourScheme(s.palette());
++            emulator.getSound().setAllChannelsEnabled(s.sound());
++            audio.setEnabled(s.sound());
++        }
++        if (thread != null) thread.setSpeedPercent(s.speedPercent());
++    }
++
++    // ------------------------------------------------------------ actions du menu
++
++    public void reset() { if (emulator != null) emulator.reset(); }
++
++    /** Emulator.saveState() attend la fin de l'image en cours (verrou du cœur) : l'instantané
++     *  est toujours cohérent, sans mettre la boucle en pause. */
++    public void saveState() {
++        Emulator emu = emulator;
++        if (emu == null) return;
++        try {
++            saveStore.writeState(emu.getCartridge(), SLOT, emu.saveState());
++            Toast.makeText(app, R.string.state_saved, Toast.LENGTH_SHORT).show();
++        } catch (IOException e) {
++            Toast.makeText(app, e.getMessage(), Toast.LENGTH_LONG).show();
++        }
++    }
++
++    public void loadState() {
++        Emulator emu = emulator;
++        if (emu == null) return;
++        try {
++            SaveState st = saveStore.readState(emu.getCartridge(), SLOT);
++            if (st == null) { Toast.makeText(app, R.string.no_state, Toast.LENGTH_SHORT).show(); return; }
++            emu.loadState(st);   // appliqué entre deux images
++            Toast.makeText(app, R.string.state_loaded, Toast.LENGTH_SHORT).show();
++        } catch (IOException | IllegalArgumentException e) {
++            Toast.makeText(app, e.getMessage(), Toast.LENGTH_LONG).show();
++        }
++    }
++}
+diff --git a/android/app/src/main/java/javaboy/android/EmulatorViewModel.java b/android/app/src/main/java/javaboy/android/EmulatorViewModel.java
+deleted file mode 100644
+index a7be60c..0000000
+--- a/android/app/src/main/java/javaboy/android/EmulatorViewModel.java
++++ /dev/null
+@@ -1,20 +0,0 @@
+-package javaboy.android;
+-
+-import androidx.lifecycle.ViewModel;
+-import javaboy.core.Emulator;
+-
+-/** Survit à la rotation de l'écran : l'émulateur et son thread ne sont pas recréés. */
+-public final class EmulatorViewModel extends ViewModel {
+-    Emulator emulator;
+-    EmulationThread thread;
+-    AndroidAudioOutput audio;
+-    android.net.Uri romUri;
+-    String romName;
+-
+-    boolean hasGame() { return emulator != null; }
+-
+-    @Override protected void onCleared() {
+-        if (thread != null) thread.shutdown();
+-        if (audio != null) audio.release();
+-    }
+-}
+diff --git a/android/app/src/main/java/javaboy/android/LibraryActivity.java b/android/app/src/main/java/javaboy/android/LibraryActivity.java
+index bddca56..a344ffc 100644
+--- a/android/app/src/main/java/javaboy/android/LibraryActivity.java
++++ b/android/app/src/main/java/javaboy/android/LibraryActivity.java
+@@ -7,6 +7,8 @@ import android.text.format.DateUtils;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.*;
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
+ import androidx.appcompat.app.AppCompatActivity;
+ 
+ import java.util.List;
+@@ -19,6 +21,13 @@ public final class LibraryActivity extends AppCompatActivity {
+     private String query = "";
+     private ListView list;
+ 
++    private final ActivityResultLauncher<String[]> openRom =
++            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
++                if (uri == null) return;
++                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
++                play(uri);
++            });
++
+     @Override protected void onCreate(Bundle b) {
+         super.onCreate(b);
+         library = new RomLibrary(this);
+@@ -49,7 +58,7 @@ public final class LibraryActivity extends AppCompatActivity {
+ 
+         Button open = new Button(this);
+         open.setText(R.string.open_rom);
+-        open.setOnClickListener(v -> { setResult(RESULT_OK); startActivity(new Intent(this, MainActivity.class)); finish(); });
++        open.setOnClickListener(v -> openRom.launch(new String[]{"*/*"}));
+ 
+         bar.addView(search); bar.addView(sortSpinner); bar.addView(fav);
+         root.addView(bar);
+@@ -58,19 +67,16 @@ public final class LibraryActivity extends AppCompatActivity {
+         root.addView(open);
+         setContentView(root);
+ 
+-        list.setOnItemClickListener((p, v, pos, id) -> play((RomLibrary.Entry) p.getItemAtPosition(pos)));
++        list.setOnItemClickListener((p, v, pos, id) -> play(Uri.parse(((RomLibrary.Entry) p.getItemAtPosition(pos)).uri())));
+         list.setOnItemLongClickListener((p, v, pos, id) -> {
+             library.toggleFavorite(((RomLibrary.Entry) p.getItemAtPosition(pos)).uri()); refresh(); return true;
+         });
+         refresh();
+     }
+ 
+-    private void play(RomLibrary.Entry e) {
+-        Intent i = new Intent(this, MainActivity.class);
+-        i.setData(Uri.parse(e.uri()));
+-        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+-        startActivity(i);
+-        finish();
++    /** Démarre la partie puis revient à la coque Game Boy, qui l'affiche à sa reprise. */
++    private void play(Uri uri) {
++        if (EmulatorSession.get(this).load(uri)) finish();
+     }
+ 
+     private void refresh() {
+diff --git a/android/app/src/main/java/javaboy/android/MainActivity.java b/android/app/src/main/java/javaboy/android/MainActivity.java
+deleted file mode 100644
+index 3d7bd38..0000000
+--- a/android/app/src/main/java/javaboy/android/MainActivity.java
++++ /dev/null
+@@ -1,210 +0,0 @@
+-package javaboy.android;
+-
+-import android.content.Intent;
+-import android.net.Uri;
+-import android.os.Bundle;
+-import android.view.View;
+-import android.widget.PopupMenu;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-import androidx.activity.result.ActivityResultLauncher;
+-import androidx.activity.result.contract.ActivityResultContracts;
+-import androidx.appcompat.app.AppCompatActivity;
+-import androidx.lifecycle.ViewModelProvider;
+-import javaboy.core.*;
+-
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.util.function.IntUnaryOperator;
+-
+-/** Écran de jeu : SurfaceView + manette tactile. L'émulateur vit dans un ViewModel pour
+- *  survivre aux rotations ; la boucle tourne dans {@link EmulationThread}. */
+-public final class MainActivity extends AppCompatActivity {
+-    private static final int SLOT = 0;
+-
+-    private EmulatorViewModel vm;
+-    private GameView gameView;
+-    private TouchPad touchPad;
+-    private TextView status;
+-    private SaveStore saveStore;
+-    private RomLibrary library;
+-    private Settings settings;
+-    private final int[] filtered = new int[GraphicsChip.WIDTH * GraphicsChip.HEIGHT];
+-    private volatile IntUnaryOperator filter = Filters.IDENTITY;
+-
+-    private final ActivityResultLauncher<String[]> openRom =
+-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+-                if (uri == null) return;
+-                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+-                loadRom(uri);
+-            });
+-
+-    @Override protected void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_main);
+-        vm = new ViewModelProvider(this).get(EmulatorViewModel.class);
+-        gameView = findViewById(R.id.game_view);
+-        touchPad = findViewById(R.id.touch_pad);
+-        status = findViewById(R.id.status);
+-        saveStore = new SaveStore(this);
+-        library = new RomLibrary(this);
+-        findViewById(R.id.menu_button).setOnClickListener(this::showMenu);
+-        gameView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
+-                gameView.post(() -> touchPad.setScreenRect(gameView.screenRect())));
+-        touchPad.setListener((button, pressed) -> {
+-            Emulator e = vm.emulator;
+-            if (e != null) e.setButton(button, pressed);
+-        });
+-        applySettings(Settings.load(this));
+-
+-        if (vm.hasGame()) {
+-            attachFrameListener(vm.emulator);
+-            status.setText(vm.romName);
+-        } else {
+-            Uri uri = getIntent().getData();
+-            if (uri != null) loadRom(uri);
+-        }
+-    }
+-
+-    @Override protected void onResume() {
+-        super.onResume();
+-        Settings s = Settings.load(this);
+-        if (!s.equals(settings)) applySettings(s);
+-        if (vm.thread != null) { vm.thread.setPaused(false); if (vm.audio != null) vm.audio.resume(); }
+-    }
+-
+-    @Override protected void onPause() {
+-        super.onPause();
+-        if (vm.thread != null) { vm.thread.setPaused(true); if (vm.audio != null) vm.audio.pause(); }
+-        if (vm.emulator != null) saveStore.saveBatteryRam(vm.emulator);
+-    }
+-
+-    private void applySettings(Settings s) {
+-        settings = s;
+-        filter = s.filter();
+-        touchPad.setOpacity(s.padOpacity());
+-        touchPad.setHaptics(s.haptics());
+-        gameView.setSmoothScaling(s.smoothScaling());
+-        if (vm.emulator != null) {
+-            vm.emulator.setColourScheme(s.palette());
+-            vm.emulator.getSound().setAllChannelsEnabled(s.sound());
+-            if (vm.audio != null) vm.audio.setEnabled(s.sound());
+-        }
+-        if (vm.thread != null) vm.thread.setSpeedPercent(s.speedPercent());
+-    }
+-
+-    // ------------------------------------------------------------ chargement
+-
+-    private void loadRom(Uri uri) {
+-        byte[] bytes;
+-        try (InputStream in = getContentResolver().openInputStream(uri)) {
+-            if (in == null) throw new IOException("flux nul");
+-            bytes = RomArchive.unwrap(in.readAllBytes());
+-        } catch (IOException e) {
+-            Toast.makeText(this, getString(R.string.invalid_rom, e.getMessage()), Toast.LENGTH_LONG).show();
+-            return;
+-        }
+-        CartridgeResult result = Cartridge.load(bytes);
+-        if (result instanceof CartridgeResult.Error err) {
+-            Toast.makeText(this, getString(R.string.invalid_rom, err.message()), Toast.LENGTH_LONG).show();
+-            return;
+-        }
+-        CartridgeResult.Ok ok = (CartridgeResult.Ok) result;
+-        if (!ok.checksumValid()) Toast.makeText(this, R.string.bad_checksum, Toast.LENGTH_SHORT).show();
+-        startGame(ok.cartridge(), uri);
+-    }
+-
+-    private void startGame(Cartridge cart, Uri uri) {
+-        stopGame();
+-        saveStore.loadBatteryRam(cart);
+-        AndroidAudioOutput audio = new AndroidAudioOutput(Emulator.DEFAULT_SAMPLE_RATE);
+-        Emulator emu = new Emulator(cart, new Joypad(), audio, Emulator.DEFAULT_SAMPLE_RATE);
+-        emu.setGbcAllowed(settings.gbcAllowed());
+-        emu.reset();
+-        vm.emulator = emu;
+-        vm.audio = audio;
+-        vm.romUri = uri;
+-        vm.romName = cart.getCartName() + " · " + cart.getCartTypeName() + (emu.isGbcMode() ? " · GBC" : "");
+-        applySettings(settings);
+-        attachFrameListener(emu);
+-        vm.thread = new EmulationThread(emu);
+-        vm.thread.setSpeedPercent(settings.speedPercent());
+-        vm.thread.start();
+-        status.setText(vm.romName);
+-        library.recordPlay(uri, cart.getCartName(), cart.getCartTypeName(), cart.isGbc());
+-    }
+-
+-    private void attachFrameListener(Emulator emu) {
+-        emu.setFrameListener(pixels -> {
+-            IntUnaryOperator f = filter;
+-            if (f == Filters.IDENTITY) {
+-                gameView.draw(pixels);
+-            } else {
+-                Filters.apply(f, pixels, filtered);
+-                gameView.draw(filtered);
+-            }
+-        });
+-    }
+-
+-    private void stopGame() {
+-        if (vm.thread != null) { vm.thread.shutdown(); vm.thread = null; }
+-        if (vm.emulator != null) { saveStore.saveBatteryRam(vm.emulator); vm.emulator = null; }
+-        if (vm.audio != null) { vm.audio.release(); vm.audio = null; }
+-    }
+-
+-    // ------------------------------------------------------------ menu
+-
+-    private void showMenu(View anchor) {
+-        PopupMenu menu = new PopupMenu(this, anchor);
+-        menu.getMenu().add(0, 1, 0, R.string.open_rom);
+-        menu.getMenu().add(0, 2, 1, R.string.library);
+-        menu.getMenu().add(0, 3, 2, R.string.reset);
+-        menu.getMenu().add(0, 4, 3, R.string.save_state);
+-        menu.getMenu().add(0, 5, 4, R.string.load_state);
+-        menu.getMenu().add(0, 6, 5, R.string.settings);
+-        menu.setOnMenuItemClickListener(item -> {
+-            switch (item.getItemId()) {
+-                case 1 -> openRom.launch(new String[]{"*/*"});
+-                case 2 -> startActivity(new Intent(this, LibraryActivity.class));
+-                case 3 -> { if (vm.emulator != null) vm.emulator.reset(); }
+-                case 4 -> saveState();
+-                case 5 -> loadState();
+-                case 6 -> startActivity(new Intent(this, SettingsActivity.class));
+-            }
+-            return true;
+-        });
+-        menu.show();
+-    }
+-
+-    /** Emulator.saveState() attend la fin de l'image en cours (verrou du cœur) : l'instantané
+-     *  est toujours cohérent, sans mettre la boucle en pause. */
+-    private void saveState() {
+-        Emulator emu = vm.emulator;
+-        if (emu == null) return;
+-        try {
+-            saveStore.writeState(emu.getCartridge(), SLOT, emu.saveState());
+-            Toast.makeText(this, R.string.state_saved, Toast.LENGTH_SHORT).show();
+-        } catch (IOException e) {
+-            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+-        }
+-    }
+-
+-    private void loadState() {
+-        Emulator emu = vm.emulator;
+-        if (emu == null) return;
+-        try {
+-            SaveState st = saveStore.readState(emu.getCartridge(), SLOT);
+-            if (st == null) { Toast.makeText(this, R.string.no_state, Toast.LENGTH_SHORT).show(); return; }
+-            emu.loadState(st);   // appliqué entre deux images
+-            Toast.makeText(this, R.string.state_loaded, Toast.LENGTH_SHORT).show();
+-        } catch (IOException | IllegalArgumentException e) {
+-            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+-        }
+-    }
+-
+-    @Override protected void onNewIntent(Intent intent) {
+-        super.onNewIntent(intent);
+-        Uri uri = intent.getData();
+-        if (uri != null) loadRom(uri);
+-    }
+-}
+diff --git a/android/app/src/main/java/javaboy/android/ScreenDrawable.java b/android/app/src/main/java/javaboy/android/ScreenDrawable.java
+new file mode 100644
+index 0000000..192f434
+--- /dev/null
++++ b/android/app/src/main/java/javaboy/android/ScreenDrawable.java
+@@ -0,0 +1,76 @@
++package javaboy.android;
++
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.ColorFilter;
++import android.graphics.Paint;
++import android.graphics.PixelFormat;
++import android.graphics.Rect;
++import android.graphics.drawable.Drawable;
++import android.view.View;
++import javaboy.core.GraphicsChip;
++
++import java.util.function.Consumer;
++
++/** Image 160×144 du cœur, dessinée par-dessus l'écran LCD d'une coque (premier plan de la vue
++ *  {@code ecraninterne}), centrée et au ratio 10:9. Le fond de la vue reste visible autour.
++ *
++ *  <p>{@link #accept} est appelé par le thread d'émulation ; le bitmap n'est touché que par
++ *  le thread principal, dans {@link #draw}. */
++final class ScreenDrawable extends Drawable implements Consumer<int[]> {
++    private static final int W = GraphicsChip.WIDTH, H = GraphicsChip.HEIGHT;
++
++    private final View host;
++    private final int[] pending = new int[W * H];
++    private boolean dirty;                       // protégé par le verrou de `pending`
++    private boolean hasFrame;
++    private final Bitmap bitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
++    private final Paint paint = new Paint();
++    private final Rect dst = new Rect();
++    private boolean smooth;
++
++    ScreenDrawable(View host) {
++        this.host = host;
++        paint.setFilterBitmap(false);
++    }
++
++    /** Net (échelle entière, pixels carrés) ou lissé (toute la place disponible). */
++    void setSmoothScaling(boolean on) { smooth = on; paint.setFilterBitmap(on); host.invalidate(); }
++
++    @Override public void accept(int[] pixels) {
++        synchronized (pending) {
++            System.arraycopy(pixels, 0, pending, 0, pending.length);
++            dirty = true;
++        }
++        host.postInvalidateOnAnimation();
++    }
++
++    @Override public void draw(Canvas canvas) {
++        synchronized (pending) {
++            if (dirty) {
++                bitmap.setPixels(pending, 0, W, 0, 0, W, H);
++                dirty = false;
++                hasFrame = true;
++            }
++        }
++        if (!hasFrame) return;
++        Rect b = getBounds();
++        int scale = Math.min(b.width() / W, b.height() / H);
++        int dw, dh;
++        if (!smooth && scale >= 1) {
++            dw = W * scale;
++            dh = H * scale;
++        } else {
++            float f = Math.min(b.width() / (float) W, b.height() / (float) H);
++            dw = Math.round(W * f);
++            dh = Math.round(H * f);
++        }
++        int left = b.left + (b.width() - dw) / 2, top = b.top + (b.height() - dh) / 2;
++        dst.set(left, top, left + dw, top + dh);
++        canvas.drawBitmap(bitmap, null, dst, paint);
++    }
++
++    @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
++    @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); }
++    @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
++}
+diff --git a/android/app/src/main/java/javaboy/android/ShellBinder.java b/android/app/src/main/java/javaboy/android/ShellBinder.java
+new file mode 100644
+index 0000000..17ab795
+--- /dev/null
++++ b/android/app/src/main/java/javaboy/android/ShellBinder.java
+@@ -0,0 +1,225 @@
++package javaboy.android;
++
++import android.app.Activity;
++import android.app.Application;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.os.Bundle;
++import android.view.HapticFeedbackConstants;
++import android.view.InputDevice;
++import android.view.KeyEvent;
++import android.view.Menu;
++import android.view.MenuItem;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.Window;
++import androidx.drawerlayout.widget.DrawerLayout;
++import com.example.manette.Banque_de_jeu;
++import com.example.manette.BaseGameBoy;
++import com.google.android.material.navigation.NavigationView;
++import javaboy.core.Joypad;
++
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Proxy;
++import java.util.HashMap;
++import java.util.Map;
++
++/** Branche l'émulateur sur les coques Game Boy de la bibliothèque Manette, sans modifier ni
++ *  sous-classer le code du binôme : chaque Activity héritant de {@link BaseGameBoy} est
++ *  équipée à son démarrage.
++ *
++ *  <ul>
++ *   <li>écran : l'image du cœur est dessinée sur la vue {@code ecraninterne} ;</li>
++ *   <li>boutons tactiles de la coque : appui/relâchement transmis au {@link Joypad} ;</li>
++ *   <li>manette physique : touches traduites selon le mappage enregistré par {@code mappage_manette} ;</li>
++ *   <li>menu latéral : « Sauvegarder l'état » et « Charger une sauvegarde » sont rendus
++ *       fonctionnels, et trois entrées de l'émulateur sont ajoutées ;</li>
++ *   <li>jeu choisi dans la banque : chargé depuis l'extra {@code ASSET_ROM_NAME}.</li>
++ *  </ul>
++ *
++ *  Tout ce qui dépend du code du binôme (identifiants de vues, noms d'extra et de préférences)
++ *  est regroupé dans cette classe. */
++final class ShellBinder implements Application.ActivityLifecycleCallbacks {
++    /** Extra posé par Banque_de_jeu : nom d'un fichier d'assets, ou URI content:// d'une ROM ajoutée. */
++    private static final String EXTRA_ROM = "ASSET_ROM_NAME";
++    /** Préférences écrites par mappage_manette : code de touche Android pour chaque bouton. */
++    private static final String PAD_PREFS = "Btn_prefs";
++
++    private final EmulatorSession session;
++    /** Banque de jeux de Manette disponible (variante demo) ; sinon remplacée par la bibliothèque. */
++    private final boolean gameBank;
++    private final Map<Activity, Shell> shells = new HashMap<>();
++
++    ShellBinder(Context app) {
++        session = EmulatorSession.get(app);
++        gameBank = app.getResources().getBoolean(R.bool.has_game_bank);
++    }
++
++    @Override public void onActivityCreated(Activity a, Bundle state) {
++        if (a instanceof Banque_de_jeu && !gameBank) {
++            a.startActivity(new Intent(a, LibraryActivity.class));
++            a.finish();
++        }
++    }
++
++    /** Premier démarrage d'une coque : son onCreate est terminé, ses vues existent. */
++    @Override public void onActivityStarted(Activity a) {
++        if (a instanceof BaseGameBoy && !shells.containsKey(a)) shells.put(a, new Shell(a));
++    }
++
++    @Override public void onActivityResumed(Activity a) {
++        Shell s = shells.get(a);
++        if (s != null) s.resume();
++    }
++
++    @Override public void onActivityPaused(Activity a) {
++        Shell s = shells.get(a);
++        if (s != null) s.pause();
++    }
++
++    @Override public void onActivityDestroyed(Activity a) { shells.remove(a); }
++    @Override public void onActivityStopped(Activity a) { }
++    @Override public void onActivitySaveInstanceState(Activity a, Bundle out) { }
++
++    /** Une coque équipée. */
++    private final class Shell {
++        private final Activity activity;
++        private final ScreenDrawable screen;
++        private final DrawerLayout drawer;
++        private final Map<Integer, Joypad.Button> keys = new HashMap<>();
++
++        Shell(Activity a) {
++            activity = a;
++            drawer = a.findViewById(com.example.manette.R.id.drawerLayout);
++
++            View lcd = a.findViewById(com.example.manette.R.id.ecraninterne);
++            screen = lcd == null ? null : new ScreenDrawable(lcd);
++            if (lcd != null) lcd.setForeground(screen);
++
++            // Absents de certaines coques (la Game Boy Advance n'a ni Select ni Start).
++            touch(com.example.manette.R.id.Haut, Joypad.Button.UP);
++            touch(com.example.manette.R.id.Bas, Joypad.Button.DOWN);
++            touch(com.example.manette.R.id.Gauche, Joypad.Button.LEFT);
++            touch(com.example.manette.R.id.Droite, Joypad.Button.RIGHT);
++            touch(com.example.manette.R.id.boutonA, Joypad.Button.A);
++            touch(com.example.manette.R.id.boutonB, Joypad.Button.B);
++            touch(com.example.manette.R.id.Select, Joypad.Button.SELECT);
++            touch(com.example.manette.R.id.Start, Joypad.Button.START);
++
++            NavigationView nav = a.findViewById(com.example.manette.R.id.navigation);
++            if (nav != null) {
++                Menu menu = nav.getMenu();
++                onClick(menu.findItem(com.example.manette.R.id.sauvegarde), session::saveState);
++                onClick(menu.findItem(com.example.manette.R.id.cherche_sauv), session::loadState);
++                onClick(menu.add(R.string.library), () -> a.startActivity(new Intent(a, LibraryActivity.class)));
++                onClick(menu.add(R.string.reset), session::reset);
++                onClick(menu.add(R.string.settings), () -> a.startActivity(new Intent(a, SettingsActivity.class)));
++            }
++
++            interceptKeys(a.getWindow());
++
++            // Jeu choisi dans la banque. L'extra est retiré pour qu'une rotation de l'écran
++            // (Activity recréée avec le même Intent) ne relance pas la partie depuis le début.
++            String rom = a.getIntent().getStringExtra(EXTRA_ROM);
++            if (rom != null) {
++                a.getIntent().removeExtra(EXTRA_ROM);
++                session.load(rom.startsWith("content://") ? Uri.parse(rom) : EmulatorSession.assetUri(rom));
++            }
++        }
++
++        void resume() {
++            loadKeys();
++            if (screen != null) {
++                screen.setSmoothScaling(session.settings().smoothScaling());
++                session.attachScreen(screen);
++            }
++            session.resume();
++        }
++
++        void pause() {
++            session.pause();
++            if (screen != null) session.detachScreen(screen);
++        }
++
++        /** Bouton tactile de la coque : enfoncé tant que le doigt est dessus. */
++        private void touch(int viewId, Joypad.Button button) {
++            View v = activity.findViewById(viewId);
++            if (v == null) return;
++            v.setOnTouchListener((view, ev) -> {
++                switch (ev.getActionMasked()) {
++                    case MotionEvent.ACTION_DOWN -> {
++                        view.setPressed(true);
++                        if (session.settings().haptics()) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                        session.setButton(button, true);
++                    }
++                    case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
++                        view.setPressed(false);
++                        session.setButton(button, false);
++                    }
++                    default -> { }
++                }
++                return true;
++            });
++        }
++
++        /** Le listener d'un élément de menu passe avant celui du NavigationView (posé par
++         *  BaseGameBoy), qui reste donc en place pour les entrées de Manette. */
++        private void onClick(MenuItem item, Runnable action) {
++            if (item == null) return;
++            item.setOnMenuItemClickListener(i -> {
++                action.run();
++                if (drawer != null) drawer.closeDrawers();
++                return true;
++            });
++        }
++
++        /** Mêmes clés et mêmes valeurs par défaut que mappage_manette. */
++        private void loadKeys() {
++            SharedPreferences p = activity.getSharedPreferences(PAD_PREFS, Context.MODE_PRIVATE);
++            keys.clear();
++            keys.put(p.getInt("keycode_a", KeyEvent.KEYCODE_BUTTON_A), Joypad.Button.A);
++            keys.put(p.getInt("keycode_b", KeyEvent.KEYCODE_BUTTON_B), Joypad.Button.B);
++            keys.put(p.getInt("keycode_up", KeyEvent.KEYCODE_DPAD_UP), Joypad.Button.UP);
++            keys.put(p.getInt("keycode_down", KeyEvent.KEYCODE_DPAD_DOWN), Joypad.Button.DOWN);
++            keys.put(p.getInt("keycode_left", KeyEvent.KEYCODE_DPAD_LEFT), Joypad.Button.LEFT);
++            keys.put(p.getInt("keycode_right", KeyEvent.KEYCODE_DPAD_RIGHT), Joypad.Button.RIGHT);
++            keys.put(p.getInt("keycode_start", KeyEvent.KEYCODE_BUTTON_START), Joypad.Button.START);
++            keys.put(p.getInt("keycode_select", KeyEvent.KEYCODE_BUTTON_SELECT), Joypad.Button.SELECT);
++        }
++
++        /** Touche d'une manette physique. @return vrai si elle est mappée (événement consommé). */
++        private boolean onKey(KeyEvent ev) {
++            int source = ev.getSource();
++            boolean gamepad = (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
++                    || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
++            if (!gamepad) return false;
++            Joypad.Button button = keys.get(ev.getKeyCode());
++            if (button == null) return false;
++            if (ev.getAction() == KeyEvent.ACTION_DOWN) {
++                if (ev.getRepeatCount() == 0) session.setButton(button, true);
++            } else if (ev.getAction() == KeyEvent.ACTION_UP) {
++                session.setButton(button, false);
++            }
++            return true;
++        }
++
++        /** Les touches sont lues à l'entrée de la fenêtre, avant les vues (sinon la croix
++         *  déplacerait le focus entre les boutons). Les autres appels de Window.Callback sont
++         *  relayés tels quels au callback d'origine (celui d'AppCompat). */
++        private void interceptKeys(Window window) {
++            Window.Callback original = window.getCallback();
++            window.setCallback((Window.Callback) Proxy.newProxyInstance(
++                    Window.Callback.class.getClassLoader(), new Class<?>[]{Window.Callback.class},
++                    (proxy, method, args) -> {
++                        if (method.getName().equals("dispatchKeyEvent") && onKey((KeyEvent) args[0])) return true;
++                        try {
++                            return method.invoke(original, args);
++                        } catch (InvocationTargetException e) {
++                            throw e.getCause();
++                        }
++                    }));
++        }
++    }
++}
+diff --git a/android/app/src/main/res/layout/activity_main.xml b/android/app/src/main/res/layout/activity_main.xml
+deleted file mode 100644
+index d49181e..0000000
+--- a/android/app/src/main/res/layout/activity_main.xml
++++ /dev/null
+@@ -1,34 +0,0 @@
+-<?xml version="1.0" encoding="utf-8"?>
+-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:layout_width="match_parent"
+-    android:layout_height="match_parent">
+-
+-    <javaboy.android.GameView
+-        android:id="@+id/game_view"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent" />
+-
+-    <javaboy.android.TouchPad
+-        android:id="@+id/touch_pad"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent" />
+-
+-    <TextView
+-        android:id="@+id/status"
+-        android:layout_width="wrap_content"
+-        android:layout_height="wrap_content"
+-        android:layout_gravity="top|start"
+-        android:padding="8dp"
+-        android:textColor="#CCFFFFFF"
+-        android:text="@string/no_rom" />
+-
+-    <ImageButton
+-        android:id="@+id/menu_button"
+-        android:layout_width="48dp"
+-        android:layout_height="48dp"
+-        android:layout_gravity="top|end"
+-        android:layout_margin="8dp"
+-        android:background="?attr/selectableItemBackgroundBorderless"
+-        android:contentDescription="Menu"
+-        android:src="@android:drawable/ic_menu_more" />
+-</FrameLayout>
+diff --git a/android/app/src/main/res/values/flavor.xml b/android/app/src/main/res/values/flavor.xml
+new file mode 100644
+index 0000000..8c0493f
+--- /dev/null
++++ b/android/app/src/main/res/values/flavor.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <!-- Banque de jeux de Manette (catalogue + ROMs embarquées). Vrai dans la variante demo. -->
++    <bool name="has_game_bank">false</bool>
++</resources>
+diff --git a/android/build.gradle.kts b/android/build.gradle.kts
+index aede370..58e0ed5 100644
+--- a/android/build.gradle.kts
++++ b/android/build.gradle.kts
+@@ -1,3 +1,5 @@
++// Même version d'AGP que le dépôt Manette (gradle/libs.versions.toml du submodule).
+ plugins {
+-    id("com.android.application") version "8.5.2" apply false
++    id("com.android.application") version "9.4.1" apply false
++    id("com.android.library") version "9.4.1" apply false
+ }
+diff --git a/android/gradle/wrapper/gradle-wrapper.properties b/android/gradle/wrapper/gradle-wrapper.properties
+index 19a6bde..ed0b3c1 100644
+--- a/android/gradle/wrapper/gradle-wrapper.properties
++++ b/android/gradle/wrapper/gradle-wrapper.properties
+@@ -1,6 +1,7 @@
+ distributionBase=GRADLE_USER_HOME
+ distributionPath=wrapper/dists
+-distributionUrl=https\://services.gradle.org/distributions/gradle-9.3.0-bin.zip
++distributionSha256Sum=bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01
++distributionUrl=https\://services.gradle.org/distributions/gradle-9.6.0-bin.zip
+ networkTimeout=10000
+ validateDistributionUrl=true
+ zipStoreBase=GRADLE_USER_HOME
+diff --git a/android/manette/build.gradle.kts b/android/manette/build.gradle.kts
+new file mode 100644
+index 0000000..0d4c239
+--- /dev/null
++++ b/android/manette/build.gradle.kts
+@@ -0,0 +1,46 @@
++// Enveloppe « bibliothèque » autour du dépôt Manette (submodule third_party/Manette).
++//
++// Le dépôt du binôme est une application ; ce module en compile les sources telles quelles
++// avec le plugin bibliothèque, sans rien y modifier. Seul le manifeste est remplacé
++// (src/main/AndroidManifest.xml) : pas d'icône de lancement, pas d'attributs <application>.
++//
++//   ./gradlew :manette:assembleRelease   ->  manette/build/outputs/aar/manette-release.aar
++plugins { id("com.android.library") }
++
++val manetteSrc = rootDir.parentFile.resolve("third_party/Manette/app/src/main")
++
++android {
++    // Doit rester le package de la classe R utilisée par les sources du binôme.
++    namespace = "com.example.manette"
++    compileSdk {
++        version = release(37)
++    }
++
++    defaultConfig {
++        // Le dépôt Manette déclare minSdk 30 ; abaissé à celui de :app pour la fusion des manifestes.
++        minSdk = 26
++    }
++
++    compileOptions {
++        sourceCompatibility = JavaVersion.VERSION_17
++        targetCompatibility = JavaVersion.VERSION_17
++    }
++
++    sourceSets {
++        getByName("main") {
++            java.srcDir(manetteSrc.resolve("java"))
++            res.srcDir(manetteSrc.resolve("res"))
++            // Les assets (ROMs de la banque de jeux) ne font pas partie de la bibliothèque :
++            // :app les ajoute dans sa seule variante « demo ».
++        }
++    }
++}
++
++dependencies {
++    // Mêmes dépendances que third_party/Manette/app/build.gradle.kts.
++    implementation(manetteLibs.activity.ktx)
++    implementation(manetteLibs.appcompat)
++    implementation(manetteLibs.constraintlayout)
++    implementation(manetteLibs.material)
++    implementation("com.google.code.gson:gson:2.10.1")
++}
+diff --git a/android/manette/src/main/AndroidManifest.xml b/android/manette/src/main/AndroidManifest.xml
+new file mode 100644
+index 0000000..5ad400d
+--- /dev/null
++++ b/android/manette/src/main/AndroidManifest.xml
+@@ -0,0 +1,4 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Manifeste de la bibliothèque : volontairement vide. Les écrans de Manette utilisés par
++     l'émulateur sont déclarés côté :app (voir app/src/demo/AndroidManifest.xml). -->
++<manifest />
+diff --git a/android/settings.gradle.kts b/android/settings.gradle.kts
+index b53862b..9ee6469 100644
+--- a/android/settings.gradle.kts
++++ b/android/settings.gradle.kts
+@@ -5,10 +5,24 @@ pluginManagement {
+ plugins {
+     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+ }
++
++// Dépôt du binôme, en submodule git. Il n'est jamais modifié ici : le module :manette
++// (android/manette) est une enveloppe qui compile ses sources en bibliothèque (AAR).
++val manetteCatalog = rootDir.parentFile.resolve("third_party/Manette/gradle/libs.versions.toml")
++require(manetteCatalog.isFile) {
++    "Submodule Manette absent (${manetteCatalog.parentFile.parentFile}). " +
++        "Lancer : git submodule update --init   (premier ajout : scripts/ajouter-submodule-manette.sh <URL>)"
++}
++
+ dependencyResolutionManagement {
+     repositories { google(); mavenCentral() }
++    versionCatalogs {
++        // Les versions des dépendances de :manette suivent celles du dépôt du binôme.
++        create("manetteLibs") { from(files(manetteCatalog)) }
++    }
+ }
+ rootProject.name = "javaboy-android"
+ include(":app")
+ include(":core")
+ project(":core").projectDir = file("../core")
++include(":manette")
+diff --git a/docs/08-integration-manette.md b/docs/08-integration-manette.md
+new file mode 100644
+index 0000000..4f9278b
+--- /dev/null
++++ b/docs/08-integration-manette.md
+@@ -0,0 +1,126 @@
++# Intégration du dépôt Manette : coques Game Boy + noyau JavaBoy
++
++_10 novembre 2026 — **non compilé avec le SDK Android** (absent de l'environnement de travail).
++Le nouveau code Java a seulement été vérifié par `javac` contre des bouchons de l'API Android._
++
++## Objectif
++
++Les coques Game Boy du binôme (dépôt Manette) deviennent l'écran de jeu ; le noyau JavaBoy
++tourne dedans. Contraintes retenues :
++
++- Manette est un **submodule git**, compilé en **bibliothèque (AAR)** ; son dépôt n'est pas modifié ;
++- la **banque de jeux** (ROMs embarquées) sert à la démo et ne doit pas partir sur le Play Store :
++  deux variantes de build, `demo` et `play`.
++
++## Architecture
++
++```
++third_party/Manette/     submodule git (dépôt du binôme, intact)
++android/manette/         module :manette — enveloppe « bibliothèque » : build.gradle.kts + manifeste vide
++android/app/             émulateur : session, branchement sur les coques, bibliothèque, réglages
++```
++
++| Classe (`javaboy.android`) | Rôle |
++|---|---|
++| `App` | Enregistre `ShellBinder` au démarrage du processus |
++| `ShellBinder` | Équipe chaque coque (`BaseGameBoy`) : écran, boutons, manette physique, menu, ROM de la banque |
++| `ScreenDrawable` | Dessine l'image 160×144 sur la vue `ecraninterne` de la coque |
++| `EmulatorSession` | Partie en cours (émulateur, thread, son, sauvegardes), partagée par tous les écrans |
++
++### Enveloppe `:manette`
++
++Le dépôt Manette est une *application*. `android/manette/build.gradle.kts` applique
++`com.android.library` et pointe ses `sourceSets` vers `third_party/Manette/app/src/main/{java,res}`.
++Le manifeste du binôme est remplacé par un manifeste vide ; ses Activities sont déclarées dans
++le manifeste de `:app`, et sa `MainActivity` (coque classique) est l'écran de lancement.
++Le binôme continue à lancer son application depuis son dépôt, sans rien changer.
++
++- `android/settings.gradle.kts` importe `third_party/Manette/gradle/libs.versions.toml`
++  (`manetteLibs`) : les dépendances de `:manette` suivent celles du binôme (sauf Gson, écrit en dur chez lui).
++- `./gradlew :manette:assembleRelease` produit `android/manette/build/outputs/aar/manette-release.aar`.
++  `:app` en dépend par `implementation(project(":manette"))` : même bibliothèque, sans copie manuelle.
++
++### Branchement sur les coques (`ShellBinder`)
++
++Le code du binôme n'est ni modifié ni sous-classé : `ShellBinder` est un
++`ActivityLifecycleCallbacks` qui équipe toute Activity héritant de `BaseGameBoy` à son premier
++`onStart`. Ses écrans et sa navigation fonctionnent donc exactement comme dans son application.
++
++| Élément | Mécanisme |
++|---|---|
++| Écran | `ScreenDrawable` posé en premier plan de `ecraninterne` ; la teinte LCD choisie dans ses paramètres reste visible autour de l'image |
++| Boutons tactiles | `OnTouchListener` sur `Haut`, `Bas`, `Gauche`, `Droite`, `boutonA`, `boutonB`, `Select`, `Start` → `Joypad` |
++| Manette physique | touches lues à l'entrée de la fenêtre et traduites selon les préférences `Btn_prefs` écrites par `mappage_manette` |
++| Menu latéral | « Sauvegarder l'état » et « Charger une sauvegarde » rendus fonctionnels ; ajout de « Bibliothèque », « Reset », « Réglages » |
++| Jeu de la banque | extra `ASSET_ROM_NAME` (asset ou URI `content://`) chargé dans la session |
++
++### Session (`EmulatorSession`)
++
++Changer de style lance une autre Activity : la partie ne peut pas vivre dans l'écran. La session
++est unique par processus ; la coque visible s'y attache à `onResume` et s'en détache à `onPause`
++(pause de l'émulation, sauvegarde de la RAM de cartouche).
++
++## Ce qui change dans l'émulateur
++
++- **Supprimés** : `MainActivity`, `EmulatorViewModel`, `layout/activity_main.xml`. Leur logique
++  est dans `EmulatorSession` ; le layout portait le même nom que celui de Manette et l'aurait écrasé.
++- **Plus utilisés, laissés en place** : `GameView` et `TouchPad` (ancien écran plein écran).
++- `LibraryActivity` : charge la ROM dans la session puis revient à la coque ; son bouton
++  « Ouvrir une ROM » ouvre maintenant le sélecteur de fichiers.
++- Lecture de la ROM sans `InputStream.readAllBytes()` (absent avant Android 13).
++- AGP 8.5.2 → **9.4.1**, Gradle 9.3.0 → **9.6.0**, `compileSdk` 34 → **37**, alignés sur le
++  dépôt Manette. `minSdk` et `targetSdk` inchangés.
++
++## Variantes
++
++| | `demo` | `play` |
++|---|---|---|
++| applicationId | `javaboy.android.demo` | `javaboy.android` |
++| ROMs embarquées | oui (assets du submodule) | **aucune** |
++| Entrée « Banque de jeu » | banque de Manette | redirigée vers la bibliothèque de l'émulateur |
++| Coques, mappage, styles, paramètres | oui | oui |
++
++`./gradlew :app:assembleDemoDebug` · `./gradlew :app:assemblePlayRelease`
++
++Les ROMs ne sont pas dans l'AAR : `:app` ajoute les assets du submodule à sa seule variante
++`demo`. Le booléen `has_game_bank` (`res/values/flavor.xml`, surchargé dans `src/demo`) décide
++de la redirection.
++
++**Reste dans `play` :** le code de `Banque_de_jeu` (titres et descriptions du catalogue) et les
++**jaquettes** (`res/drawable`), inatteignables mais présents dans l'APK. On ne peut pas les
++retirer sans toucher au dépôt Manette, car `BaseGameBoy` référence `Banque_de_jeu`.
++
++## Mise en place
++
++```
++scripts/ajouter-submodule-manette.sh <URL du dépôt Manette> [branche]   # une fois
++git commit -m "Ajout du submodule Manette"
++git clone --recurse-submodules …        # ou : git submodule update --init
++git submodule update --remote third_party/Manette                       # suivre le binôme
++```
++
++Sans le submodule, Gradle s'arrête avec un message indiquant la commande à lancer.
++
++## Points de couplage avec le code du binôme
++
++Tous dans `ShellBinder`, le manifeste de `:app` et les deux `build.gradle.kts`. À revérifier à
++chaque mise à jour du submodule :
++
++- identifiants de vues et d'entrées de menu (`ecraninterne`, `Haut`…, `navigation`, `sauvegarde`, `cherche_sauv`) ;
++- extra `ASSET_ROM_NAME` ; préférences `Btn_prefs` (`keycode_a`…) ;
++- noms des Activities déclarées dans le manifeste ; package `com.example.manette` ;
++- arborescence `app/src/main/{java,res,assets}` et `gradle/libs.versions.toml`.
++
++## Limites connues et propositions (non implémentées)
++
++1. **Avant la publication** : sortir du code de Manette le catalogue et les jaquettes (la
++   branche `fix/bibliotheque` a déjà un `CatalogueJeux` séparé), pour qu'ils ne soient plus dans `play`.
++2. La coque **Game Boy Advance** n'a ni Select ni Start : la plupart des jeux y sont
++   injouables au tactile (une manette physique fonctionne).
++3. Croix tactile : quatre boutons séparés, donc pas de diagonale en glissant le doigt
++   (l'ancien `TouchPad` le permettait).
++4. Chaque jeu lancé depuis la banque empile une nouvelle coque au-dessus de la précédente
++   (comportement de Manette) : « retour » revient à l'ancienne coque, avec la même partie.
++5. `:manette` est compilé avec `minSdk 26` alors que le binôme déclare 30 : non testé sur Android 8 à 10.
++6. Les ROMs et jaquettes sont des œuvres protégées : l'APK `demo` ne doit pas être diffusé,
++   et elles restent dans l'historique git du dépôt Manette.
+diff --git a/scripts/ajouter-submodule-manette.sh b/scripts/ajouter-submodule-manette.sh
+new file mode 100755
+index 0000000..53c30ec
+--- /dev/null
++++ b/scripts/ajouter-submodule-manette.sh
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++# Ajoute le dépôt Manette en submodule git, à l'emplacement attendu par android/settings.gradle.kts.
++# À lancer une seule fois, puis committer .gitmodules et third_party/Manette.
++#
++#   scripts/ajouter-submodule-manette.sh <URL du dépôt Manette> [branche]
++set -euo pipefail
++
++url=${1:?"usage : $0 <URL du dépôt Manette> [branche, défaut : master]"}
++branch=${2:-master}
++dest=third_party/Manette
++
++cd "$(git rev-parse --show-toplevel)"
++if [ -e "$dest" ]; then
++    echo "$dest existe déjà : rien à faire (git submodule update --init pour le remplir)." >&2
++    exit 1
++fi
++
++git submodule add -b "$branch" "$url" "$dest"
++echo
++echo "Submodule ajouté sur la branche '$branch'. Reste à faire :"
++echo "  git commit -m \"Ajout du submodule Manette\""
++echo "Après un clone : git clone --recurse-submodules …  ou  git submodule update --init"
++echo "Mettre à jour  : git submodule update --remote $dest   puis committer"

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Banque de jeux de Manette (catalogue + ROMs embarquées). Vrai dans la variante demo. -->
+    <bool name="has_game_bank">false</bool>
+</resources>

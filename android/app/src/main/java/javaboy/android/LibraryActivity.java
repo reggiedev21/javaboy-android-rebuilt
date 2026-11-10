@@ -7,6 +7,8 @@ import android.text.format.DateUtils;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.List;
@@ -18,6 +20,13 @@ public final class LibraryActivity extends AppCompatActivity {
     private boolean favoritesOnly = false;
     private String query = "";
     private ListView list;
+
+    private final ActivityResultLauncher<String[]> openRom =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri == null) return;
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                play(uri);
+            });
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -49,7 +58,7 @@ public final class LibraryActivity extends AppCompatActivity {
 
         Button open = new Button(this);
         open.setText(R.string.open_rom);
-        open.setOnClickListener(v -> { setResult(RESULT_OK); startActivity(new Intent(this, MainActivity.class)); finish(); });
+        open.setOnClickListener(v -> openRom.launch(new String[]{"*/*"}));
 
         bar.addView(search); bar.addView(sortSpinner); bar.addView(fav);
         root.addView(bar);
@@ -58,19 +67,16 @@ public final class LibraryActivity extends AppCompatActivity {
         root.addView(open);
         setContentView(root);
 
-        list.setOnItemClickListener((p, v, pos, id) -> play((RomLibrary.Entry) p.getItemAtPosition(pos)));
+        list.setOnItemClickListener((p, v, pos, id) -> play(Uri.parse(((RomLibrary.Entry) p.getItemAtPosition(pos)).uri())));
         list.setOnItemLongClickListener((p, v, pos, id) -> {
             library.toggleFavorite(((RomLibrary.Entry) p.getItemAtPosition(pos)).uri()); refresh(); return true;
         });
         refresh();
     }
 
-    private void play(RomLibrary.Entry e) {
-        Intent i = new Intent(this, MainActivity.class);
-        i.setData(Uri.parse(e.uri()));
-        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        startActivity(i);
-        finish();
+    /** Démarre la partie puis revient à la coque Game Boy, qui l'affiche à sa reprise. */
+    private void play(Uri uri) {
+        if (EmulatorSession.get(this).load(uri)) finish();
     }
 
     private void refresh() {

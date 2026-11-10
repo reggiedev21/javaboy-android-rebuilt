@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Manifeste de la bibliothèque : volontairement vide. Les écrans de Manette utilisés par
+     l'émulateur sont déclarés côté :app (voir app/src/demo/AndroidManifest.xml). -->
+<manifest />
