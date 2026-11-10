@@ -55,16 +55,8 @@ final class ScreenDrawable extends Drawable implements Consumer<int[]> {
         }
         if (!hasFrame) return;
         Rect b = getBounds();
-        int scale = Math.min(b.width() / W, b.height() / H);
-        int dw, dh;
-        if (!smooth && scale >= 1) {
-            dw = W * scale;
-            dh = H * scale;
-        } else {
-            float f = Math.min(b.width() / (float) W, b.height() / (float) H);
-            dw = Math.round(W * f);
-            dh = Math.round(H * f);
-        }
+        float f = Math.min(b.width() / (float) W, b.height() / (float) H);
+        int dw = Math.round(W * f), dh = Math.round(H * f);
         int left = b.left + (b.width() - dw) / 2, top = b.top + (b.height() - dh) / 2;
         dst.set(left, top, left + dw, top + dh);
         canvas.drawBitmap(bitmap, null, dst, paint);

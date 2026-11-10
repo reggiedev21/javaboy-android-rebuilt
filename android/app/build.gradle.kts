@@ -49,6 +49,7 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":manette"))
+    implementation(manetteLibs.material)
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel:2.8.6")
