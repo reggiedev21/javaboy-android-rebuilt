@@ -11,7 +11,7 @@ Android Studio (Build ▸ Make Project) avant les tests sur téléphone (phase 6
 
 Le dépôt Manette du binôme est un submodule (`third_party/Manette`) compilé en bibliothèque
 par le module `:manette`. Ses coques Game Boy sont l'écran de jeu ; l'émulateur s'y branche
-via `ShellBinder`. Après un clone : `git submodule update --init`.
+via `ShellBinder` (et son écran Paramètres via `ManetteSettingsBinder`). Après un clone : `git submodule update --init`.
 
 - `demo` : banque de jeux de Manette avec ses ROMs — pour la démonstration uniquement.
 - `play` : aucune ROM embarquée — version destinée au Play Store.
@@ -22,7 +22,7 @@ Détails : `docs/08-integration-manette.md`.
 
 | Classe | Rôle |
 |---|---|
-| `App`, `ShellBinder` | Branchent l'émulateur sur les coques Game Boy de Manette |
+| `App`, `ShellBinder`, `ManetteSettingsBinder` | Branchent l'émulateur sur les coques Game Boy et l'écran Paramètres de Manette |
 | `ScreenDrawable` | Image 160×144 dessinée sur l'écran LCD de la coque |
 | `EmulatorSession` | Partie en cours (émulateur, thread, son), partagée par tous les écrans |
 | `EmulationThread` | Boucle `runFrame()` à 60 Hz, pause/reprise, vitesse réglable |

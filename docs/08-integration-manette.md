@@ -1,6 +1,6 @@
 # Intégration du dépôt Manette : coques Game Boy + noyau JavaBoy
 
-_10 novembre 2026 — **non compilé avec le SDK Android** (absent de l'environnement de travail).
+_10 novembre 2026, mis à jour le 17 novembre (réglages du binôme intégrés) — **non compilé avec le SDK Android** (absent de l'environnement de travail).
 Le nouveau code Java a seulement été vérifié par `javac` contre des bouchons de l'API Android._
 
 ## Objectif
@@ -22,8 +22,10 @@ android/app/             émulateur : session, branchement sur les coques, bibli
 
 | Classe (`javaboy.android`) | Rôle |
 |---|---|
-| `App` | Enregistre `ShellBinder` au démarrage du processus |
+| `App` | Enregistre `ShellBinder` et `ManetteSettingsBinder` au démarrage du processus |
 | `ShellBinder` | Équipe chaque coque (`BaseGameBoy`) : écran, boutons, manette physique, menu, ROM de la banque |
+| `ManetteSettingsBinder` | Branche l'écran « Paramètres » de Manette sur `Settings` : onglet « Emulation », boutons de palette |
+| `EmulationSettingsFragment` | Onglet « Emulation » : `parametres_emulation` du binôme, décommenté |
 | `ScreenDrawable` | Dessine l'image 160×144 sur la vue `ecraninterne` de la coque |
 | `EmulatorSession` | Partie en cours (émulateur, thread, son, sauvegardes), partagée par tous les écrans |
 
@@ -53,6 +55,22 @@ Le code du binôme n'est ni modifié ni sous-classé : `ShellBinder` est un
 | Manette physique | touches lues à l'entrée de la fenêtre et traduites selon les préférences `Btn_prefs` écrites par `mappage_manette` |
 | Menu latéral | « Sauvegarder l'état » et « Charger une sauvegarde » rendus fonctionnels ; ajout de « Bibliothèque », « Reset », « Réglages » |
 | Jeu de la banque | extra `ASSET_ROM_NAME` (asset ou URI `content://`) chargé dans la session |
+
+### Écran « Paramètres » de Manette (`ManetteSettingsBinder`)
+
+Le binôme a écrit dans son dépôt les branchements de ses réglages sur ceux de l'émulateur, mais a
+dû les **commenter** : `:manette` est une bibliothèque dont dépend `:app`, elle ne peut pas importer
+`javaboy.android.Settings` (dépendance circulaire). Ils sont repris côté `:app`, sans modifier son
+dépôt :
+
+| Code commenté chez le binôme | Repris dans `:app` |
+|---|---|
+| `parametres_emulation` (Fragment entier) | `EmulationSettingsFragment`, même code décommenté ; il n'écrase plus la palette en quittant l'onglet |
+| `parametres.Choix_parametres`, cas 1 (`remplacerFragment(new parametres_emulation())`) | `ManetteSettingsBinder` remplace l'adapter de la liste d'onglets : « Emulation » affiche `EmulationSettingsFragment`, les autres onglets passent par `Choix_parametres` |
+| `parametres_couleur.selectionnerPalette` (`s.withPalette(i)` + `save`) | `ManetteSettingsBinder` pose ses listeners sur `btnNuance0`…`3` (rappel `onFragmentViewCreated`, après ceux du binôme) ; un toast confirme la palette |
+
+Les quatre boutons correspondent, dans l'ordre, à `Emulator.SCHEME_NAMES`. Les réglages sont relus
+par `EmulatorSession.resume()` au retour sur la coque. Le mode sombre reste géré par Manette.
 
 ### Session (`EmulatorSession`)
 
@@ -86,9 +104,9 @@ Les ROMs ne sont pas dans l'AAR : `:app` ajoute les assets du submodule à sa se
 `demo`. Le booléen `has_game_bank` (`res/values/flavor.xml`, surchargé dans `src/demo`) décide
 de la redirection.
 
-**Reste dans `play` :** le code de `Banque_de_jeu` (titres et descriptions du catalogue) et les
+**Reste dans `play` :** le code de `banque_de_jeu` (titres et descriptions du catalogue) et les
 **jaquettes** (`res/drawable`), inatteignables mais présents dans l'APK. On ne peut pas les
-retirer sans toucher au dépôt Manette, car `BaseGameBoy` référence `Banque_de_jeu`.
+retirer sans toucher au dépôt Manette, car `BaseGameBoy` référence `banque_de_jeu`.
 
 ## Mise en place
 
@@ -103,24 +121,36 @@ Sans le submodule, Gradle s'arrête avec un message indiquant la commande à lan
 
 ## Points de couplage avec le code du binôme
 
-Tous dans `ShellBinder`, le manifeste de `:app` et les deux `build.gradle.kts`. À revérifier à
+Tous dans `ShellBinder`, `ManetteSettingsBinder`, le manifeste de `:app` et les deux `build.gradle.kts`. À revérifier à
 chaque mise à jour du submodule :
 
 - identifiants de vues et d'entrées de menu (`ecraninterne`, `Haut`…, `navigation`, `sauvegarde`, `cherche_sauv`) ;
 - extra `ASSET_ROM_NAME` ; préférences `Btn_prefs` (`keycode_a`…) ;
-- noms des Activities déclarées dans le manifeste ; package `com.example.manette` ;
+- noms des Activities déclarées dans le manifeste (renommées le 17/11 : `banque_de_jeu`, `banque_de_style`) ; package `com.example.manette` ;
+- écran Paramètres : classes `parametres`, `parametresadapter`, `parametres_couleur`, méthode
+  `Choix_parametres`, ids `Paramètres_menu`, `contenue`, `btnNuance0`…`3`, et la liste des onglets
+  (`ManetteSettingsBinder.TABS`, recopiée de `parametres.onCreate`) ;
 - arborescence `app/src/main/{java,res,assets}` et `gradle/libs.versions.toml`.
 
 ## Limites connues et propositions (non implémentées)
 
 1. **Avant la publication** : sortir du code de Manette le catalogue et les jaquettes (la
-   branche `fix/bibliotheque` a déjà un `CatalogueJeux` séparé), pour qu'ils ne soient plus dans `play`.
-2. La coque **Game Boy Advance** n'a ni Select ni Start : la plupart des jeux y sont
-   injouables au tactile (une manette physique fonctionne).
+   catalogue est déjà séparé dans `cataloguejeu`), pour qu'ils ne soient plus dans `play`.
+2. ~~La coque Game Boy Advance n'a ni Select ni Start~~ : corrigé par le binôme (17/11), ses
+   boutons `Select` et `Start` sont branchés automatiquement par `ShellBinder`.
 3. Croix tactile : quatre boutons séparés, donc pas de diagonale en glissant le doigt
    (l'ancien `TouchPad` le permettait).
 4. Chaque jeu lancé depuis la banque empile une nouvelle coque au-dessus de la précédente
    (comportement de Manette) : « retour » revient à l'ancienne coque, avec la même partie.
 5. `:manette` est compilé avec `minSdk 26` alors que le binôme déclare 30 : non testé sur Android 8 à 10.
+   En particulier, l'ajout d'une image dans la banque de jeux (`ImageDecoder`, Android 9) plantera
+   sur Android 8.
 6. Les ROMs et jaquettes sont des œuvres protégées : l'APK `demo` ne doit pas être diffusé,
    et elles restent dans l'historique git du dépôt Manette.
+7. Deux entrées de menu ouvrent des réglages : « Paramètres avancés » (Manette, avec maintenant
+   l'onglet « Emulation ») et « Réglages » (ajoutée par `ShellBinder`, `SettingsActivity`). Elles
+   modifient les mêmes réglages ; « Réglages » pourrait être retirée, ou `SettingsActivity` afficher
+   `EmulationSettingsFragment` pour ne plus dupliquer ce code.
+8. Le plus simple à terme serait de sortir `Settings` dans un petit module `:settings` dont
+   dépendraient `:manette` et `:app` : le binôme pourrait alors décommenter son code chez lui.
+   Cela suppose qu'il ajoute ce module à son propre projet.

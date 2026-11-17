@@ -24,8 +24,8 @@
         </activity>
         <activity android:name="com.example.manette.Gameboy_color" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.example.manette.game_boy_advance" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
-        <activity android:name="com.example.manette.Banque_de_jeu" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
-        <activity android:name="com.example.manette.Banque_de_style" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.banque_de_jeu" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.manette.banque_de_style" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.example.manette.mappage_manette" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.example.manette.parametres" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.example.manette.Paraetres_apropos" android:theme="@style/Theme.Manette" android:windowSoftInputMode="adjustResize" />

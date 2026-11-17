@@ -7,5 +7,6 @@ public final class App extends Application {
     @Override public void onCreate() {
         super.onCreate();
         registerActivityLifecycleCallbacks(new ShellBinder(this));
+        registerActivityLifecycleCallbacks(new ManetteSettingsBinder());
     }
 }

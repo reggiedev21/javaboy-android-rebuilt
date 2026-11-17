@@ -16,7 +16,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import androidx.drawerlayout.widget.DrawerLayout;
-import com.example.manette.Banque_de_jeu;
+import com.example.manette.banque_de_jeu;
 import com.example.manette.BaseGameBoy;
 import com.google.android.material.navigation.NavigationView;
 import javaboy.core.Joypad;
@@ -42,7 +42,7 @@ import java.util.Map;
  *  Tout ce qui dépend du code du binôme (identifiants de vues, noms d'extra et de préférences)
  *  est regroupé dans cette classe. */
 final class ShellBinder implements Application.ActivityLifecycleCallbacks {
-    /** Extra posé par Banque_de_jeu : nom d'un fichier d'assets, ou URI content:// d'une ROM ajoutée. */
+    /** Extra posé par banque_de_jeu : nom d'un fichier d'assets, ou URI content:// d'une ROM ajoutée. */
     private static final String EXTRA_ROM = "ASSET_ROM_NAME";
     /** Préférences écrites par mappage_manette : code de touche Android pour chaque bouton. */
     private static final String PAD_PREFS = "Btn_prefs";
@@ -58,7 +58,7 @@ final class ShellBinder implements Application.ActivityLifecycleCallbacks {
     }
 
     @Override public void onActivityCreated(Activity a, Bundle state) {
-        if (a instanceof Banque_de_jeu && !gameBank) {
+        if (a instanceof banque_de_jeu && !gameBank) {
             a.startActivity(new Intent(a, LibraryActivity.class));
             a.finish();
         }
