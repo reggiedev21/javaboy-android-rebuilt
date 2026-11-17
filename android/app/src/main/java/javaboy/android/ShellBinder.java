@@ -113,9 +113,10 @@ final class ShellBinder implements Application.ActivityLifecycleCallbacks {
                 Menu menu = nav.getMenu();
                 onClick(menu.findItem(com.example.manette.R.id.sauvegarde), session::saveState);
                 onClick(menu.findItem(com.example.manette.R.id.cherche_sauv), session::loadState);
-                onClick(menu.add(R.string.library), () -> a.startActivity(new Intent(a, LibraryActivity.class)));
-                onClick(menu.add(R.string.reset), session::reset);
-                onClick(menu.add(R.string.settings), () -> a.startActivity(new Intent(a, SettingsActivity.class)));
+                // Icônes système, comme celles du menu de Manette (@android:drawable/ic_menu_*).
+                onClick(menu.add(R.string.library).setIcon(android.R.drawable.ic_menu_agenda), () -> a.startActivity(new Intent(a, LibraryActivity.class)));
+                onClick(menu.add(R.string.reset).setIcon(android.R.drawable.ic_menu_rotate), session::reset);
+                onClick(menu.add(R.string.settings).setIcon(android.R.drawable.ic_menu_manage), () -> a.startActivity(new Intent(a, SettingsActivity.class)));
             }
 
             interceptKeys(a.getWindow());
